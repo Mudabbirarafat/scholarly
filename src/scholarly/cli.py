@@ -9,7 +9,7 @@ import sys
 from sqlalchemy import func, select
 
 from scholarly.db import init_db, session_scope
-from scholarly.ingest import ingest_years
+from scholarly.ingest import ingest_span
 from scholarly.models import Citation, IngestRun, Paper
 
 
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ingest":
         summary = asyncio.run(
-            ingest_years(
+            ingest_span(
                 args.from_year,
                 args.to_year,
                 require_references=not args.documents_only,

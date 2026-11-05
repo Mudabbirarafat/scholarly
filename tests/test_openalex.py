@@ -111,13 +111,14 @@ def test_an_unusable_record_is_rejected_rather_than_stored_blank():
 def test_documents_and_evaluation_queries_are_filtered_differently():
     """A document only has to be searchable. A query is worthless without the
     reference list that is its ground truth."""
-    documents = corpus_filter(2010, 2021, require_references=False)
-    queries = corpus_filter(2018, 2021, require_references=True)
+    documents = corpus_filter("2010-01-01", "2021-12-31", require_references=False)
+    queries = corpus_filter("2018-01-01", "2018-01-31", require_references=True)
 
     assert "referenced_works_count:>0" not in documents
     assert "referenced_works_count:>0" in queries
     assert "has_abstract:true" in documents
-    assert "publication_year:2010-2021" in documents
+    assert "from_publication_date:2010-01-01" in documents
+    assert "to_publication_date:2021-12-31" in documents
 
 
 def test_paging_uses_a_cursor():
@@ -147,7 +148,8 @@ def test_a_key_is_sent_as_a_bearer_token_never_in_the_url(monkeypatch):
 
     assert authenticated() is True
     assert headers()["Authorization"] == "Bearer secret-key-value"
-    assert "secret-key-value" not in works_url(corpus_filter(2018, 2021, require_references=True))
+    built = works_url(corpus_filter("2018-01-01", "2018-01-31", require_references=True))
+    assert "secret-key-value" not in built
 
 
 def test_without_a_key_nothing_is_sent_and_the_caller_can_tell(monkeypatch):
@@ -167,3 +169,14 @@ def test_a_contact_address_is_sent_only_when_configured(monkeypatch):
 
     monkeypatch.setenv("OPENALEX_MAILTO", "someone@example.com")
     assert "mailto:someone@example.com" in headers()["User-Agent"]
+
+
+def test_month_slices_cover_the_span_and_know_about_february():
+    from scholarly.sources.openalex import month_slices
+
+    slices = month_slices(2019, 2020)
+    assert len(slices) == 24
+    assert slices[0] == ("2019-01-01", "2019-01-31")
+    assert slices[1] == ("2019-02-01", "2019-02-28")
+    assert slices[13] == ("2020-02-01", "2020-02-29")  # leap year
+    assert slices[-1] == ("2020-12-01", "2020-12-31")

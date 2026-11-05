@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from scholarly import raw
 from scholarly.db import session_scope, upsert_papers
-from scholarly.ingest import ingest_corpus
+from scholarly.ingest import ingest_corpus, ingest_span
 from scholarly.models import Citation, IngestRun, Paper, Quarantine
 
 
@@ -28,7 +28,10 @@ async def test_a_page_becomes_papers_and_citations(db, mock_client):
     pages = {"*": page([work("W1", refs=["W2", "W3"])])}
 
     summary = await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     assert summary["succeeded"] == 1
@@ -48,7 +51,10 @@ async def test_citations_are_kept_even_when_the_cited_paper_is_absent(db, mock_c
     pages = {"*": page([work("W1", refs=["W9999999"])])}
 
     await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     with session_scope() as session:
@@ -61,7 +67,10 @@ async def test_the_payload_is_landed_before_it_is_parsed(db, mock_client):
     pages = {"*": page([work("W1"), work("W2")])}
 
     await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     landed = list((db / "raw").rglob("page-*.jsonl"))
@@ -81,7 +90,10 @@ async def test_paging_follows_the_cursor_to_the_end(db, mock_client):
     }
 
     summary = await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     assert summary["pages"] == 3
@@ -97,7 +109,10 @@ async def test_one_unreadable_record_does_not_cost_the_page(db, mock_client):
     pages = {"*": page([work("W1"), broken, work("W3")])}
 
     summary = await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     assert summary["succeeded"] == 2
@@ -115,10 +130,16 @@ async def test_running_the_same_slice_twice_changes_nothing(db, mock_client):
     pages = {"*": page([work("W1", refs=["W2", "W3"])])}
 
     await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
     await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     with session_scope() as session:
@@ -152,8 +173,8 @@ async def test_a_limit_stops_the_walk_early(db, mock_client):
     }
 
     summary = await ingest_corpus(
-        2018,
-        2021,
+        "2018-01-01",
+        "2018-01-31",
         max_records=2,
         client=mock_client(responder(pages)),
         raw_directory=str(db / "raw"),
@@ -169,7 +190,10 @@ async def test_a_page_that_will_not_load_fails_the_run_rather_than_truncating(db
     pages = {"*": page([work("W1")], next_cursor="c2")}  # c2 is missing -> 404
 
     summary = await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     assert summary["status"] == "partial"
@@ -191,7 +215,10 @@ async def test_a_walk_that_ends_early_is_not_reported_as_a_success(db, mock_clie
     pages = {"*": page([work(f"W{i}") for i in range(200)], count=68225, next_cursor=None)}
 
     summary = await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     assert summary["succeeded"] == 200
@@ -205,7 +232,10 @@ async def test_a_complete_walk_is_not_flagged(db, mock_client):
     pages = {"*": page([work("W1"), work("W2")], next_cursor=None)}
 
     summary = await ingest_corpus(
-        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+        "2018-01-01",
+        "2018-01-31",
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
     )
 
     assert summary["status"] == "succeeded"
@@ -217,8 +247,8 @@ async def test_an_explicit_limit_is_not_an_incomplete_walk(db, mock_client):
     pages = {"*": page([work(f"W{i}") for i in range(200)], count=68225, next_cursor="c2")}
 
     summary = await ingest_corpus(
-        2018,
-        2021,
+        "2018-01-01",
+        "2018-01-31",
         max_records=200,
         client=mock_client(responder(pages)),
         raw_directory=str(db / "raw"),
@@ -228,55 +258,64 @@ async def test_an_explicit_limit_is_not_an_incomplete_walk(db, mock_client):
     assert summary["error"] is None
 
 
-async def test_a_span_is_walked_one_year_at_a_time(db, mock_client):
-    """OpenAlex's cursor stops early on large result sets: 2018-2021 reporting
-    68,225 records ended after 33,796, while 2018 alone completed exactly. So
-    the span is sliced into years small enough to walk."""
-    from scholarly.ingest import ingest_years
-
+async def test_a_span_is_walked_as_monthly_slices(db, mock_client):
+    """Cursor truncation is intermittent and upstream, so no slice size is
+    simply safe. A month is about seven pages: short enough that redoing one
+    costs seconds."""
     asked: list[str] = []
 
     def handle(request):
         asked.append(request.url.params.get("filter", ""))
         return httpx.Response(200, json=page([work(f"W{len(asked)}")], next_cursor=None))
 
-    summary = await ingest_years(
-        2018, 2021, client=mock_client(handle), raw_directory=str(db / "raw")
+    summary = await ingest_span(
+        2018, 2018, client=mock_client(handle), raw_directory=str(db / "raw")
     )
 
-    assert [f.split("publication_year:")[1].split(",")[0] for f in asked] == [
-        "2018-2018",
-        "2019-2019",
-        "2020-2020",
-        "2021-2021",
-    ]
-    assert summary["succeeded"] == 4
+    assert len(asked) == 12
+    assert "from_publication_date:2018-01-01" in asked[0]
+    assert "to_publication_date:2018-01-31" in asked[0]
+    assert "to_publication_date:2018-02-28" in asked[1]
+    assert "to_publication_date:2018-12-31" in asked[11]
     assert summary["status"] == "succeeded"
-    assert summary["incomplete_years"] == []
+    assert summary["incomplete_slices"] == []
 
 
-async def test_one_short_year_makes_the_whole_span_short(db, mock_client):
-    """Averaging a shortfall across a span is how it disappears."""
-    from scholarly.ingest import ingest_years
-
-    seen: list[int] = []
+async def test_a_short_slice_is_retried(db, mock_client):
+    """Re-running is safe because every write in the path is idempotent, and a
+    retry restarts the slice from its first page."""
+    attempts: list[int] = []
 
     def handle(request):
-        seen.append(1)
-        # The second year under-delivers against its own reported count.
-        short = len(seen) == 2
+        attempts.append(1)
+        # The first attempt at the first slice under-delivers; the retry does not.
+        short = len(attempts) == 1
         return httpx.Response(
             200,
-            json=page(
-                [work(f"W{len(seen)}")],
-                count=50_000 if short else None,
-                next_cursor=None,
-            ),
+            json=page([work(f"W{len(attempts)}")], count=9_000 if short else None,
+                      next_cursor=None),
         )
 
-    summary = await ingest_years(
-        2018, 2019, client=mock_client(handle), raw_directory=str(db / "raw")
+    summary = await ingest_span(
+        2018, 2018, retries=2, client=mock_client(handle), raw_directory=str(db / "raw")
+    )
+
+    # 12 months plus one retry of the first.
+    assert len(attempts) == 13
+    assert summary["status"] == "succeeded"
+
+
+async def test_a_slice_that_stays_short_makes_the_span_partial(db, mock_client):
+    def handle(request):
+        first = "2018-01-01" in request.url.params.get("filter", "")
+        return httpx.Response(
+            200,
+            json=page([work("W1")], count=9_000 if first else None, next_cursor=None),
+        )
+
+    summary = await ingest_span(
+        2018, 2018, retries=1, client=mock_client(handle), raw_directory=str(db / "raw")
     )
 
     assert summary["status"] == "partial"
-    assert summary["incomplete_years"] == [2019]
+    assert summary["incomplete_slices"] == ["2018-01-01"]

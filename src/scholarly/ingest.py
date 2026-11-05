@@ -54,50 +54,64 @@ def _rows(records: list[dict]) -> tuple[list[dict], list[tuple[str, str]], list[
     return papers, edges, rejected
 
 
-async def ingest_years(
+async def ingest_span(
     from_year: int,
     to_year: int,
+    *,
+    retries: int = 2,
     **kwargs,
 ) -> dict:
-    """Walk a span of years, one year at a time.
+    """Walk a span as monthly slices, retrying any slice that comes up short.
 
-    **OpenAlex's cursor stops early on large result sets.** Measured: a
-    2018-2021 query reporting 68,225 records ended itself after 33,796, with
-    169 pages served and no error; 2018 alone, 13,021 records, completed
-    exactly. The ceiling sits somewhere above 33,800 and is not documented, so
-    the corpus is taken in slices small enough to stay under it.
+    **Cursor paging against OpenAlex truncates, intermittently.** Measured: a
+    2018-2021 query reporting 68,225 records stopped at 33,796; 2018 alone
+    then completed exactly at 13,021; and in the very next run 2018 stopped at
+    7,590 while 2019 completed. It is upstream and it is not deterministic, so
+    there is no slice size that is simply safe.
 
-    One run per year rather than one for the span, deliberately: a slice that
-    comes up short is then visible as a short slice, instead of disappearing
-    into a total that looks about right.
+    What works is making a truncation cheap rather than trying to avoid it: a
+    month is about seven pages, so a short slice costs seconds to redo. Slices
+    are retried because re-running is safe - every write in the path is
+    idempotent - and a retry starts the slice again from its first page.
+
+    One run record per attempt, so the history shows the retries rather than
+    hiding them behind a total that looks about right.
     """
-    runs = []
-    for year in range(from_year, to_year + 1):
-        summary = await ingest_corpus(year, year, **kwargs)
-        runs.append(summary)
-        log.info("year finished", extra={"year": year, **summary})
+    slices = openalex.month_slices(from_year, to_year)
+    best: list[tuple[str, dict]] = []
 
+    for first, last in slices:
+        attempt_summary = await ingest_corpus(first, last, **kwargs)
+        for attempt in range(retries):
+            if attempt_summary["status"] == "succeeded":
+                break
+            log.warning(
+                "slice came up short, retrying",
+                extra={"slice": first, "attempt": attempt + 1, **attempt_summary},
+            )
+            retry = await ingest_corpus(first, last, **kwargs)
+            # Keep whichever attempt actually collected more; the warehouse
+            # holds the union of all of them regardless, because the writes
+            # are idempotent.
+            if retry["succeeded"] >= attempt_summary["succeeded"]:
+                attempt_summary = retry
+        best.append((first, attempt_summary))
+
+    short = [first for first, summary in best if summary["status"] != "succeeded"]
     return {
-        "years": {run_summary["run_id"]: run_summary for run_summary in runs},
-        "expected": sum(r["expected"] or 0 for r in runs),
-        "requested": sum(r["requested"] for r in runs),
-        "succeeded": sum(r["succeeded"] for r in runs),
-        "quarantined": sum(r["quarantined"] for r in runs),
-        # One short year makes the whole span short. Averaging would hide it.
-        "status": "succeeded"
-        if all(r["status"] == "succeeded" for r in runs)
-        else "partial",
-        "incomplete_years": [
-            year
-            for year, r in zip(range(from_year, to_year + 1), runs, strict=True)
-            if r["status"] != "succeeded"
-        ],
+        "slices": len(best),
+        "expected": sum(s["expected"] or 0 for _, s in best),
+        "succeeded": sum(s["succeeded"] for _, s in best),
+        "quarantined": sum(s["quarantined"] for _, s in best),
+        # One short slice makes the whole span short. Averaging would hide it.
+        "status": "succeeded" if not short else "partial",
+        "incomplete_slices": short,
     }
 
 
 async def ingest_corpus(
-    from_year: int,
-    to_year: int,
+    from_date: str,
+    to_date: str,
     *,
     require_references: bool = True,
     max_records: int | None = None,
@@ -107,7 +121,7 @@ async def ingest_corpus(
 ) -> dict:
     """Ingest one slice of the corpus. Returns a summary of the run."""
     filter_string = openalex.corpus_filter(
-        from_year, to_year, require_references=require_references
+        from_date, to_date, require_references=require_references
     )
 
     with session_scope(db_url) as session:

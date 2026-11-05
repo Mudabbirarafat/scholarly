@@ -118,8 +118,13 @@ def parse_work(document: dict) -> Work:
     )
 
 
-def corpus_filter(from_year: int, to_year: int, *, require_references: bool) -> str:
-    """The filter string for one slice of the corpus.
+def corpus_filter(from_date: str, to_date: str, *, require_references: bool) -> str:
+    """The filter string for one slice of the corpus, bounded by dates.
+
+    Dates rather than years because the slice has to be able to get small.
+    Cursor paging truncates unpredictably against a large result set - see
+    `docs/corpus-decisions.md` - and a month is short enough that a truncated
+    slice costs seven pages to redo instead of several hundred.
 
     `require_references` separates the two populations deliberately: documents
     only need an abstract to be searchable, while a paper used as an evaluation
@@ -128,12 +133,25 @@ def corpus_filter(from_year: int, to_year: int, *, require_references: bool) -> 
     parts = [
         f"primary_location.source.id:{ARXIV_SOURCE}",
         f"primary_topic.field.id:{CS_FIELD}",
-        f"publication_year:{from_year}-{to_year}",
+        f"from_publication_date:{from_date}",
+        f"to_publication_date:{to_date}",
         "has_abstract:true",
     ]
     if require_references:
         parts.append("referenced_works_count:>0")
     return ",".join(parts)
+
+
+def month_slices(from_year: int, to_year: int) -> list[tuple[str, str]]:
+    """(first, last) dates for every month in the span, inclusive."""
+    from calendar import monthrange
+
+    slices = []
+    for year in range(from_year, to_year + 1):
+        for month in range(1, 13):
+            last = monthrange(year, month)[1]
+            slices.append((f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last:02d}"))
+    return slices
 
 
 def works_url(filter_string: str, *, cursor: str = "*", per_page: int = 200) -> str:
