@@ -87,7 +87,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         print(json.dumps(summary, indent=2))
-        return 0 if summary["status"] != "failed" else 1
+        # Anything short of "succeeded" is a non-zero exit, so a pipeline step
+        # cannot go on to spend an hour encoding half a corpus. An explicit
+        # --limit stays "succeeded", because asking for less and getting it is
+        # the limit working rather than the walk breaking.
+        return 0 if summary["status"] == "succeeded" else 1
 
     if args.command == "index":
         with session_scope() as session:
