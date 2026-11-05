@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from scholarly.sources.openalex import (
+    authenticated,
     corpus_filter,
     headers,
     next_cursor,
@@ -134,6 +135,28 @@ def test_the_end_of_the_corpus_is_a_missing_cursor():
     assert next_cursor({"meta": {"next_cursor": None}}) is None
     assert next_cursor({"meta": {}}) is None
     assert next_cursor({}) is None
+
+
+def test_a_key_is_sent_as_a_bearer_token_never_in_the_url(monkeypatch):
+    """Both forms work; only one of them stays out of the logs.
+
+    httpx logs full request URLs, and CI output on a public repository is
+    public - so a key in the query string is a published key.
+    """
+    monkeypatch.setenv("OPENALEX_API_KEY", "secret-key-value")
+
+    assert authenticated() is True
+    assert headers()["Authorization"] == "Bearer secret-key-value"
+    assert "secret-key-value" not in works_url(corpus_filter(2018, 2021, require_references=True))
+
+
+def test_without_a_key_nothing_is_sent_and_the_caller_can_tell(monkeypatch):
+    """Keyless still returns the first page, so the run has to know the
+    difference between "no key" and "the key was refused"."""
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+
+    assert authenticated() is False
+    assert "Authorization" not in headers()
 
 
 def test_a_contact_address_is_sent_only_when_configured(monkeypatch):

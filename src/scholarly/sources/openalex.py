@@ -148,18 +148,34 @@ def works_url(filter_string: str, *, cursor: str = "*", per_page: int = 200) -> 
     )
 
 
-def headers() -> dict[str, str]:
-    """Identify the client, and join the polite pool when an address is set.
+def authenticated() -> bool:
+    return bool(os.environ.get("OPENALEX_API_KEY", "").strip())
 
-    OpenAlex serves callers who provide a contact address from a faster pool.
-    The address is deployment configuration and never belongs in the
-    repository, so it is read from the environment and simply omitted when
-    unset - the request still works, from the common pool.
+
+def headers() -> dict[str, str]:
+    """Identify the client, and authenticate when a key is configured.
+
+    **A key is not optional for this pipeline.** Keyless callers get the first
+    page of a cursor-paged query and a 401 on the second, so walking a corpus
+    of 68,244 records needs one. It is free.
+
+    The key is sent as a bearer token rather than as the `?api_key=` query
+    parameter that the documentation lists first. Both work identically, but a
+    key in the URL is a key in every client log line and in CI output - and
+    for a public repository, CI output is public.
+
+    `OPENALEX_MAILTO` is separate and still worth setting: it identifies the
+    caller in the User-Agent, which is ordinary API manners.
     """
     sent = {"User-Agent": "scholarly/0.1 (https://github.com/Mudabbirarafat/scholarly)"}
+
     mailto = os.environ.get("OPENALEX_MAILTO", "").strip()
     if mailto:
         sent["User-Agent"] += f" mailto:{mailto}"
+
+    key = os.environ.get("OPENALEX_API_KEY", "").strip()
+    if key:
+        sent["Authorization"] = f"Bearer {key}"
     return sent
 
 

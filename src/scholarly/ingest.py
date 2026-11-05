@@ -1,0 +1,169 @@
+"""Walking the corpus into the warehouse.
+
+The shape is: ask OpenAlex for a page, land it raw, parse it, write what
+parsed, quarantine what did not, move to the next cursor. Every step is
+idempotent, because a run that fails halfway has to be safe to simply run
+again - which on a scheduled pipeline is the only recovery anyone will
+actually perform.
+
+Paging is by cursor rather than page number. OpenAlex refuses to page past
+10,000 results, and the query corpus alone is 68,244.
+"""
+
+import logging
+from datetime import UTC, datetime
+
+from pydantic import ValidationError
+
+from scholarly import raw
+from scholarly.db import insert_citations, session_scope, upsert_papers
+from scholarly.http import FetchError, RateLimitedClient
+from scholarly.models import IngestRun, Quarantine
+from scholarly.sources import openalex
+
+log = logging.getLogger("scholarly.ingest")
+
+SOURCE = "openalex"
+
+
+def _rows(records: list[dict]) -> tuple[list[dict], list[tuple[str, str]], list[tuple]]:
+    """Split a page into papers, citation edges, and what could not be read."""
+    papers: list[dict] = []
+    edges: list[tuple[str, str]] = []
+    rejected: list[tuple] = []
+
+    for record in records:
+        try:
+            work = openalex.parse_work(record)
+        except ValidationError as exc:
+            rejected.append((record.get("id"), str(exc)[:400], record))
+            continue
+
+        papers.append(
+            {
+                "id": work.id,
+                "title": work.title,
+                "year": work.year,
+                "doi": work.doi,
+                "abstract": work.abstract,
+                "reference_count": len(work.referenced_works),
+            }
+        )
+        edges.extend((work.id, cited) for cited in work.referenced_works)
+
+    return papers, edges, rejected
+
+
+async def ingest_corpus(
+    from_year: int,
+    to_year: int,
+    *,
+    require_references: bool = True,
+    max_records: int | None = None,
+    client: RateLimitedClient | None = None,
+    db_url: str | None = None,
+    raw_directory: str | None = None,
+) -> dict:
+    """Ingest one slice of the corpus. Returns a summary of the run."""
+    filter_string = openalex.corpus_filter(
+        from_year, to_year, require_references=require_references
+    )
+
+    with session_scope(db_url) as session:
+        run = IngestRun(source=SOURCE)
+        session.add(run)
+        session.flush()
+        run_id = run.id
+
+    log.info(
+        "ingest started",
+        extra={"run_id": run_id, "filter": filter_string, "max_records": max_records},
+    )
+
+    owns_client = client is None
+    client = client or RateLimitedClient()
+
+    cursor: str | None = "*"
+    page = 0
+    seen = succeeded = quarantined = 0
+    error: str | None = None
+
+    try:
+        while cursor:
+            url = openalex.works_url(filter_string, cursor=cursor)
+            try:
+                payload = await client.get_json(url, headers=openalex.headers())
+            except FetchError as exc:
+                # A page that will not load ends the run rather than silently
+                # truncating the corpus: a short index that looks complete is
+                # worse than a run that says it failed.
+                error = f"page {page}: {exc}"
+                if exc.status == 401 and not openalex.authenticated():
+                    # The failure that will catch every new clone of this
+                    # repository, so it says what to do rather than what broke.
+                    error = (
+                        "OpenAlex requires a free API key to page past the first "
+                        "page. Set OPENALEX_API_KEY; see docs/corpus-decisions.md. "
+                        f"({exc})"
+                    )
+                log.error("page fetch failed", extra={"run_id": run_id, "page": page})
+                break
+
+            records = payload.get("results") or []
+            if not records:
+                break
+
+            page += 1
+            seen += len(records)
+            raw.land(records, run_id=run_id, page=page, directory=raw_directory)
+
+            papers, edges, rejected = _rows(records)
+
+            with session_scope(db_url) as session:
+                upsert_papers(session, papers)
+                insert_citations(session, edges)
+                for identifier, reason, payload_record in rejected:
+                    session.add(
+                        Quarantine(
+                            source=SOURCE,
+                            identifier=str(identifier)[:255] if identifier else None,
+                            reason=reason,
+                            payload=repr(payload_record)[:20000],
+                        )
+                    )
+
+            succeeded += len(papers)
+            quarantined += len(rejected)
+
+            if max_records is not None and seen >= max_records:
+                break
+
+            cursor = openalex.next_cursor(payload)
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    with session_scope(db_url) as session:
+        run = session.get(IngestRun, run_id)
+        run.requested = seen
+        run.succeeded = succeeded
+        run.quarantined = quarantined
+        run.failed = seen - succeeded - quarantined
+        run.finished_at = datetime.now(UTC)
+        run.error = error
+        run.status = "failed" if error and succeeded == 0 else (
+            "partial" if (error or quarantined) else "succeeded"
+        )
+        status = run.status
+
+    summary = {
+        "run_id": run_id,
+        "status": status,
+        "pages": page,
+        "requested": seen,
+        "succeeded": succeeded,
+        "quarantined": quarantined,
+        "error": error,
+    }
+    log.info("ingest finished", extra=summary)
+    return summary

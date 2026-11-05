@@ -69,11 +69,27 @@ documents per query, which is a normal size for an IR test set.
 References point backwards in time, so queries drawn from 2021 need documents
 from well before 2021 to have anything to match.
 
-## 4. No authentication anywhere
+## 4. A free API key is required, not optional
 
-Both APIs are open. OpenAlex offers a faster "polite pool" to callers who send
-a contact email; that is a per-deployment choice and belongs in an environment
-variable, never in the repository.
+Found by running the ingest for real rather than against fixtures. The first
+page of a cursor-paged query works unauthenticated; the second returns:
+
+```
+HTTP 401  "Paging past the first page with cursor= needs a free API key."
+```
+
+The corpus is 342 pages, so there is no keyless path to it. The key is free
+(an account, or an agent can request one against a verified email address) and
+raises the rate limit from 10 to 30 requests a second.
+
+**It travels in an `Authorization: Bearer` header, not the `?api_key=` query
+parameter that the documentation lists first.** Both work identically, but
+httpx logs full request URLs and CI output on a public repository is public,
+so a key in a query string is a published key. `OPENALEX_API_KEY` is read from
+the environment and never committed.
+
+`OPENALEX_MAILTO` is separate and still worth setting: it identifies the
+caller in the User-Agent, which is ordinary API manners.
 
 ## What this means for the schedule
 
