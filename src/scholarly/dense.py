@@ -13,6 +13,7 @@ takes a limit and reports what it loaded instead of quietly eating the
 machine.
 """
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass
@@ -37,14 +38,24 @@ def pending(
     recovery anyone will perform.
     """
     already = select(Embedding.paper_id).where(Embedding.model == model_name)
-    statement = (
-        select(Paper.id, Paper.abstract)
-        .where(Paper.abstract.is_not(None), Paper.id.not_in(already))
-        .order_by(Paper.id)
-    )
+    rows = session.execute(
+        select(Paper.id, Paper.abstract).where(
+            Paper.abstract.is_not(None), Paper.id.not_in(already)
+        )
+    ).all()
+
     if limit:
-        statement = statement.limit(limit)
-    return [(row[0], row[1]) for row in session.execute(statement).all()]
+        # Ordering by id would take a biased slice: OpenAlex ids broadly track
+        # when a work was first catalogued, so the first 20,000 are older
+        # papers rather than a sample of the corpus. A bounded encode exists
+        # to say something indicative about the whole, and it cannot do that
+        # from one end of it - so the order is a stable hash instead.
+        rows = sorted(rows, key=lambda row: hashlib.sha256(row[0].encode()).hexdigest())
+        rows = rows[:limit]
+    else:
+        rows = sorted(rows, key=lambda row: row[0])
+
+    return [(row[0], row[1]) for row in rows]
 
 
 def encode_corpus(

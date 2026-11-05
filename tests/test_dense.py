@@ -141,3 +141,24 @@ def test_fewer_documents_than_k_is_not_an_error(db):
         index = DenseIndex.load(session, model_name="m")
 
     assert index.search("transformer", k=50) == ["W1"]
+
+
+def test_a_bounded_encode_samples_the_corpus_rather_than_one_end_of_it(db):
+    """OpenAlex ids broadly track when a work was catalogued, so ordering by
+    id takes the oldest papers instead of a sample. A bounded encode exists to
+    say something indicative about the whole corpus, which it cannot do from
+    one end of it."""
+    with session_scope() as session:
+        for i in range(100):
+            add(session, f"W{i:04d}", "transformer")
+
+    with session_scope() as session:
+        picked = [paper_id for paper_id, _ in pending(session, "m", limit=20)]
+
+    assert len(picked) == 20
+    # Taken from across the range rather than the first twenty ids.
+    assert picked != sorted(picked)[:20]
+    assert max(picked) > "W0050"
+    # Stable: the same corpus and seed choose the same papers.
+    with session_scope() as session:
+        assert [p for p, _ in pending(session, "m", limit=20)] == picked
