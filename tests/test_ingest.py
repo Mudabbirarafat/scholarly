@@ -226,3 +226,57 @@ async def test_an_explicit_limit_is_not_an_incomplete_walk(db, mock_client):
 
     assert summary["status"] == "succeeded"
     assert summary["error"] is None
+
+
+async def test_a_span_is_walked_one_year_at_a_time(db, mock_client):
+    """OpenAlex's cursor stops early on large result sets: 2018-2021 reporting
+    68,225 records ended after 33,796, while 2018 alone completed exactly. So
+    the span is sliced into years small enough to walk."""
+    from scholarly.ingest import ingest_years
+
+    asked: list[str] = []
+
+    def handle(request):
+        asked.append(request.url.params.get("filter", ""))
+        return httpx.Response(200, json=page([work(f"W{len(asked)}")], next_cursor=None))
+
+    summary = await ingest_years(
+        2018, 2021, client=mock_client(handle), raw_directory=str(db / "raw")
+    )
+
+    assert [f.split("publication_year:")[1].split(",")[0] for f in asked] == [
+        "2018-2018",
+        "2019-2019",
+        "2020-2020",
+        "2021-2021",
+    ]
+    assert summary["succeeded"] == 4
+    assert summary["status"] == "succeeded"
+    assert summary["incomplete_years"] == []
+
+
+async def test_one_short_year_makes_the_whole_span_short(db, mock_client):
+    """Averaging a shortfall across a span is how it disappears."""
+    from scholarly.ingest import ingest_years
+
+    seen: list[int] = []
+
+    def handle(request):
+        seen.append(1)
+        # The second year under-delivers against its own reported count.
+        short = len(seen) == 2
+        return httpx.Response(
+            200,
+            json=page(
+                [work(f"W{len(seen)}")],
+                count=50_000 if short else None,
+                next_cursor=None,
+            ),
+        )
+
+    summary = await ingest_years(
+        2018, 2019, client=mock_client(handle), raw_directory=str(db / "raw")
+    )
+
+    assert summary["status"] == "partial"
+    assert summary["incomplete_years"] == [2019]

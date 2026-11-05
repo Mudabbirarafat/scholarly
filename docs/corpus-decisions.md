@@ -91,6 +91,40 @@ the environment and never committed.
 `OPENALEX_MAILTO` is separate and still worth setting: it identifies the
 caller in the User-Agent, which is ordinary API manners.
 
+## 5. The cursor stops early on large result sets
+
+Found by walking the corpus for real, and then only because the run was
+checked against what the source claimed.
+
+| Query | Reported | Collected | |
+|---|---|---|---|
+| 2018–2021 | 68,225 | 33,796 | 49.5%, status "succeeded" |
+| 2018 alone | 13,021 | 13,021 | 100% |
+
+The four-year walk served 168 full pages, a 169th with 196 records, and then
+returned a cursor with nothing behind it. No error, no 429 — `$0.9827` of the
+`$1` daily budget was still unspent. The ceiling sits somewhere above 33,800
+and is not documented.
+
+**A walk that stops early is indistinguishable from one that finished**, since
+stopping is what finishing looks like. Nothing in the run, the logs or the
+database disagreed with "succeeded".
+
+Two consequences, both now in the code:
+
+- **The span is ingested one year at a time.** Each slice is small enough to
+  complete, and each is its own run, so a short slice stays visible instead of
+  averaging into a total that looks about right.
+- **Completeness is asserted, never assumed.** The count the source reports on
+  the first page is compared against what arrived; short by more than 1% and
+  the run is `partial` with the arithmetic in the error. An explicit `--limit`
+  is exempt.
+
+The general lesson is worth more than the workaround: an index quietly holding
+half a corpus would have been embedded, evaluated and reported on as though it
+were the whole thing — and the numbers would have looked fine, because they
+would have been internally consistent.
+
 ## What this means for the schedule
 
 The spec's week three — "build the eval harness" — stays exactly where it is.

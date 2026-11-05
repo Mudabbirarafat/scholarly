@@ -9,7 +9,7 @@ import sys
 from sqlalchemy import func, select
 
 from scholarly.db import init_db, session_scope
-from scholarly.ingest import ingest_corpus
+from scholarly.ingest import ingest_years
 from scholarly.models import Citation, IngestRun, Paper
 
 
@@ -40,7 +40,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="do not require references: searchable documents rather than evaluation queries",
     )
-    ingest.add_argument("--limit", type=int, default=None, help="stop after roughly N records")
+    ingest.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="stop after roughly N records per year slice",
+    )
 
     sub.add_parser("status", help="what is in the warehouse")
 
@@ -50,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ingest":
         summary = asyncio.run(
-            ingest_corpus(
+            ingest_years(
                 args.from_year,
                 args.to_year,
                 require_references=not args.documents_only,

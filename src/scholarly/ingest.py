@@ -54,6 +54,47 @@ def _rows(records: list[dict]) -> tuple[list[dict], list[tuple[str, str]], list[
     return papers, edges, rejected
 
 
+async def ingest_years(
+    from_year: int,
+    to_year: int,
+    **kwargs,
+) -> dict:
+    """Walk a span of years, one year at a time.
+
+    **OpenAlex's cursor stops early on large result sets.** Measured: a
+    2018-2021 query reporting 68,225 records ended itself after 33,796, with
+    169 pages served and no error; 2018 alone, 13,021 records, completed
+    exactly. The ceiling sits somewhere above 33,800 and is not documented, so
+    the corpus is taken in slices small enough to stay under it.
+
+    One run per year rather than one for the span, deliberately: a slice that
+    comes up short is then visible as a short slice, instead of disappearing
+    into a total that looks about right.
+    """
+    runs = []
+    for year in range(from_year, to_year + 1):
+        summary = await ingest_corpus(year, year, **kwargs)
+        runs.append(summary)
+        log.info("year finished", extra={"year": year, **summary})
+
+    return {
+        "years": {run_summary["run_id"]: run_summary for run_summary in runs},
+        "expected": sum(r["expected"] or 0 for r in runs),
+        "requested": sum(r["requested"] for r in runs),
+        "succeeded": sum(r["succeeded"] for r in runs),
+        "quarantined": sum(r["quarantined"] for r in runs),
+        # One short year makes the whole span short. Averaging would hide it.
+        "status": "succeeded"
+        if all(r["status"] == "succeeded" for r in runs)
+        else "partial",
+        "incomplete_years": [
+            year
+            for year, r in zip(range(from_year, to_year + 1), runs, strict=True)
+            if r["status"] != "succeeded"
+        ],
+    }
+
+
 async def ingest_corpus(
     from_year: int,
     to_year: int,
