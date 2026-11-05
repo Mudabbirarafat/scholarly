@@ -38,24 +38,38 @@ def pending(
     recovery anyone will perform.
     """
     already = select(Embedding.paper_id).where(Embedding.model == model_name)
-    rows = session.execute(
-        select(Paper.id, Paper.abstract).where(
-            Paper.abstract.is_not(None), Paper.id.not_in(already)
-        )
-    ).all()
+    unencoded = (Paper.abstract.is_not(None), Paper.id.not_in(already))
 
-    if limit:
-        # Ordering by id would take a biased slice: OpenAlex ids broadly track
-        # when a work was first catalogued, so the first 20,000 are older
-        # papers rather than a sample of the corpus. A bounded encode exists
-        # to say something indicative about the whole, and it cannot do that
-        # from one end of it - so the order is a stable hash instead.
-        rows = sorted(rows, key=lambda row: hashlib.sha256(row[0].encode()).hexdigest())
-        rows = rows[:limit]
-    else:
-        rows = sorted(rows, key=lambda row: row[0])
+    if limit is None:
+        rows = session.execute(
+            select(Paper.id, Paper.abstract).where(*unencoded).order_by(Paper.id)
+        ).all()
+        return [(row[0], row[1]) for row in rows]
 
-    return [(row[0], row[1]) for row in rows]
+    # Ordering by id would take a biased slice: OpenAlex ids broadly track
+    # when a work was first catalogued, so the first 20,000 are the oldest
+    # papers rather than a sample of the corpus. A bounded encode exists to
+    # say something indicative about the whole, which it cannot do from one
+    # end of it - so the order is a stable hash instead.
+    #
+    # Only ids are read for that sort. Pulling 114,581 abstracts into memory
+    # to discard 94,581 of them is a different mistake from the one being
+    # fixed, and on a 512 MB box it is the worse one.
+    ids = [row[0] for row in session.execute(select(Paper.id).where(*unencoded)).all()]
+    ids.sort(key=lambda value: hashlib.sha256(value.encode()).hexdigest())
+    chosen = ids[:limit]
+
+    # Chunked, because SQLite caps how many bound parameters one statement
+    # may carry and a 20,000-element IN list is far past it.
+    abstracts: dict[str, str] = {}
+    for start in range(0, len(chosen), 500):
+        batch = chosen[start : start + 500]
+        for row in session.execute(
+            select(Paper.id, Paper.abstract).where(Paper.id.in_(batch))
+        ).all():
+            abstracts[row[0]] = row[1]
+
+    return [(paper_id, abstracts[paper_id]) for paper_id in chosen if paper_id in abstracts]
 
 
 def encode_corpus(

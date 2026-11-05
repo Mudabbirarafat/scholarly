@@ -15,9 +15,14 @@ on:
   workflow_dispatch:
     inputs:
       documents:
-        description: Documents to encode (blank for the whole corpus)
+        # Empty by default, and it has to stay empty: GitHub substitutes a
+        # declared default whenever the box is left blank, so a default of
+        # '20000' made "blank for the whole corpus" impossible to ask for -
+        # the first full-encode run quietly encoded 20,000 again and the
+        # coverage guard was the only thing that noticed.
+        description: Documents to encode (blank encodes the whole corpus)
         required: false
-        default: '20000'
+        default: ''
   schedule:
     # Sunday, early. Off the hour because everyone else uses the hour.
     - cron: '41 3 * * 0'

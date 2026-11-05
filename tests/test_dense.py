@@ -162,3 +162,18 @@ def test_a_bounded_encode_samples_the_corpus_rather_than_one_end_of_it(db):
     # Stable: the same corpus and seed choose the same papers.
     with session_scope() as session:
         assert [p for p, _ in pending(session, "m", limit=20)] == picked
+
+
+def test_a_large_limit_does_not_blow_the_parameter_cap(db):
+    """SQLite caps bound parameters per statement, so fetching the chosen
+    subset has to be chunked. 1,200 ids is past the usual 999."""
+    with session_scope() as session:
+        for i in range(1500):
+            add(session, f"W{i:05d}", "transformer")
+
+    with session_scope() as session:
+        picked = pending(session, "m", limit=1200)
+
+    assert len(picked) == 1200
+    assert all(abstract for _, abstract in picked)
+    assert len({paper_id for paper_id, _ in picked}) == 1200
