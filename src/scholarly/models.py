@@ -22,6 +22,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -84,6 +85,35 @@ class Citation(Base):
     # No foreign key: 82% of cited works are outside this corpus by
     # construction, and that is a fact to record rather than an error.
     cited_id: Mapped[str] = mapped_column(String(32))
+
+
+class Embedding(Base):
+    """One vector per paper, in its own table rather than a column on `papers`.
+
+    Deliberately separate. A vector column on `papers` would be rewritten by
+    `upsert_papers` on every re-ingest - the derived-column trap, where the
+    expensive thing is silently blanked by the cheap thing and nothing errors.
+    Keeping it here means a refresh of the registry metadata cannot destroy an
+    encode that took an hour of CI to produce.
+
+    `model` is stored with the vector because vectors from different encoders
+    are not comparable, and a half-re-encoded index would otherwise look
+    exactly like a working one.
+    """
+
+    __tablename__ = "embeddings"
+
+    # Composite, because the model is part of a vector's identity: one paper
+    # may hold a vector per encoder while a re-encode is in progress, and
+    # keying on paper_id alone would make the second model fail to insert
+    # rather than coexist.
+    paper_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    model: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    dimensions: Mapped[int] = mapped_column(Integer)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class EvalQuery(Base):

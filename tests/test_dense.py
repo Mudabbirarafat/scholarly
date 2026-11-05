@@ -1,0 +1,143 @@
+"""Encoding and dot-product search, with the encoder stubbed.
+
+The real model is a few hundred megabytes and several minutes; none of that
+would test anything here. What is worth testing is everything around it:
+resumability, which model a vector belongs to, and the ranking.
+"""
+
+import numpy as np
+import pytest
+
+from scholarly import embeddings
+from scholarly.db import session_scope
+from scholarly.dense import DenseIndex, encode_corpus, encoded_count, pending
+from scholarly.models import Embedding, Paper
+
+# A toy semantic space: each axis is a topic, so "attention transformer" and
+# "transformer sequence" land near each other and far from "tomatoes".
+AXES = ["transformer", "attention", "garden", "protein"]
+
+
+def fake_vector(text: str) -> np.ndarray:
+    raw = np.array([float(text.lower().count(axis)) for axis in AXES], dtype=np.float32)
+    if not raw.any():
+        raw = np.ones(len(AXES), dtype=np.float32)
+    return raw / np.linalg.norm(raw)
+
+
+@pytest.fixture(autouse=True)
+def stub_encoder(monkeypatch):
+    monkeypatch.setattr(
+        embeddings, "encode", lambda texts, **kw: (fake_vector(t) for t in texts)
+    )
+
+
+def add(session, identifier, abstract):
+    session.add(Paper(id=identifier, title=identifier, abstract=abstract))
+
+
+def test_a_vector_survives_the_round_trip():
+    vector = fake_vector("transformer attention")
+    restored = embeddings.from_blob(embeddings.to_blob(vector))
+    assert np.allclose(vector, restored)
+
+
+def test_only_unencoded_papers_with_abstracts_are_pending(db):
+    with session_scope() as session:
+        add(session, "W1", "transformer")
+        add(session, "W2", "garden")
+        session.add(Paper(id="W3", title="no abstract", abstract=None))
+
+    with session_scope() as session:
+        assert {row[0] for row in pending(session, "m")} == {"W1", "W2"}
+        encode_corpus(session, model_name="m")
+
+    with session_scope() as session:
+        assert pending(session, "m") == []
+        # A different model has encoded nothing, so everything is pending again.
+        assert len(pending(session, "other")) == 2
+
+
+def test_encoding_is_resumable(db):
+    """An encode measured in CPU-hours will be interrupted, and running it
+    again is the only recovery anyone performs."""
+    with session_scope() as session:
+        for i in range(6):
+            add(session, f"W{i}", "transformer attention")
+
+    with session_scope() as session:
+        first = encode_corpus(session, model_name="m", limit=4)
+    with session_scope() as session:
+        second = encode_corpus(session, model_name="m")
+    with session_scope() as session:
+        third = encode_corpus(session, model_name="m")
+        total = encoded_count(session, "m")
+
+    assert first["encoded"] == 4
+    assert second["encoded"] == 2
+    assert third["encoded"] == 0
+    assert total == 6
+
+
+def test_the_model_is_stored_with_the_vector(db):
+    """Vectors from different encoders are not comparable, and a half
+    re-encoded index would otherwise look exactly like a working one."""
+    with session_scope() as session:
+        add(session, "W1", "transformer")
+
+    with session_scope() as session:
+        encode_corpus(session, model_name="model-a")
+        encode_corpus(session, model_name="model-b")
+
+    with session_scope() as session:
+        stored = {row.model for row in session.query(Embedding).all()}
+        assert stored == {"model-a", "model-b"}
+        assert len(DenseIndex.load(session, model_name="model-a")) == 1
+
+
+def test_search_ranks_by_similarity(db):
+    with session_scope() as session:
+        add(session, "W1", "transformer attention attention")
+        add(session, "W2", "garden garden garden")
+        add(session, "W3", "transformer transformer attention")
+
+    with session_scope() as session:
+        encode_corpus(session, model_name="m")
+        index = DenseIndex.load(session, model_name="m")
+        found = index.search("transformer attention", k=3)
+
+    assert found[0] in {"W1", "W3"}
+    assert found[-1] == "W2"
+
+
+def test_the_query_paper_is_excluded(db):
+    with session_scope() as session:
+        add(session, "W1", "transformer attention")
+        add(session, "W2", "transformer attention")
+
+    with session_scope() as session:
+        encode_corpus(session, model_name="m")
+        index = DenseIndex.load(session, model_name="m")
+
+    assert "W1" not in index.search("transformer attention", k=5, exclude="W1")
+    assert "W1" in index.search("transformer attention", k=5)
+
+
+def test_an_empty_index_returns_nothing_rather_than_failing(db):
+    with session_scope() as session:
+        index = DenseIndex.load(session, model_name="m")
+    assert len(index) == 0
+    assert index.search("anything", k=5) == []
+
+
+def test_fewer_documents_than_k_is_not_an_error(db):
+    """argpartition raises if asked for more neighbours than there are
+    vectors, which is exactly what a small or half-encoded index looks like."""
+    with session_scope() as session:
+        add(session, "W1", "transformer")
+
+    with session_scope() as session:
+        encode_corpus(session, model_name="m")
+        index = DenseIndex.load(session, model_name="m")
+
+    assert index.search("transformer", k=50) == ["W1"]

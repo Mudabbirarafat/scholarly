@@ -1,0 +1,101 @@
+name: Pipeline
+
+# The expensive half of the system, run where the compute is free.
+#
+# Measured on the development laptop: 3.8 abstracts a second with every core
+# busy, which is 8.3 hours for the corpus. That number is the reason this
+# workflow exists rather than a convenience - a free serving instance has
+# 512 MB and cannot hold a transformer at all, while a public repository gets
+# 4 cores and 16 GB here for nothing.
+#
+# Manual and weekly, never on push: this takes hours and nobody wants it
+# attached to a typo fix.
+
+on:
+  workflow_dispatch:
+    inputs:
+      documents:
+        description: Documents to encode (blank for the whole corpus)
+        required: false
+        default: '20000'
+  schedule:
+    # Sunday, early. Off the hour because everyone else uses the hour.
+    - cron: '41 3 * * 0'
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330  # under the 6h ceiling, with room to report
+    env:
+      OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+      DATABASE_URL: sqlite:///pipeline.db
+      RAW_DIR: /tmp/scholarly-raw
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]" fastembed numpy
+
+      - name: Ingest the query population
+        run: python -m scholarly.cli ingest --from-year 2018 --to-year 2021
+
+      - name: Ingest older documents
+        # References point backwards in time, so the document corpus has to
+        # reach further back than the query set or most of the ground truth
+        # is unretrievable by construction.
+        run: python -m scholarly.cli ingest --from-year 2012 --to-year 2017 --documents-only
+
+      - name: Build the lexical index
+        run: python -m scholarly.cli index --rebuild
+
+      - name: Freeze the evaluation set
+        run: python -m scholarly.cli freeze --size 2000
+
+      - name: Encode
+        run: |
+          python -m scholarly.cli embed \
+            ${{ github.event.inputs.documents && format('--limit {0}', github.event.inputs.documents) || '' }} \
+            --batch-size 64
+
+      - name: Evaluate both retrievers on the dev split
+        run: |
+          python -m scholarly.cli eval --split dev --retriever lexical | tee lexical.json
+          python -m scholarly.cli eval --split dev --retriever dense   | tee dense.json
+
+      - name: The gate
+        # A rebuild that retrieves worse than the lexical floor does not get
+        # published. Beating BM25 is the whole claim a dense retriever makes;
+        # if it cannot, the honest outcome is a red build, not a quiet one.
+        run: |
+          python - <<'EOF'
+          import json, sys
+          lex = json.load(open("lexical.json"))
+          dense = json.load(open("dense.json"))
+          print(f"lexical recall@10 {lex['recall@10']}  dense recall@10 {dense['recall@10']}")
+          if dense["queries"] == 0:
+              sys.exit("dense evaluated nothing")
+          if dense["recall@10"] < lex["recall@10"]:
+              sys.exit(
+                  f"dense ({dense['recall@10']}) did not beat lexical ({lex['recall@10']})"
+              )
+          EOF
+
+      - name: Keep the vectors
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: warehouse
+          path: |
+            pipeline.db
+            lexical.json
+            dense.json
+          retention-days: 14

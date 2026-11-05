@@ -9,6 +9,7 @@ import sys
 from sqlalchemy import func, select
 
 from scholarly.db import init_db, session_scope
+from scholarly.dense import DenseIndex, encode_corpus, encoded_count
 from scholarly.evaluation import build_query_set, coverage, evaluate
 from scholarly.ingest import ingest_span
 from scholarly.lexical import build_index, search
@@ -63,9 +64,14 @@ def main(argv: list[str] | None = None) -> int:
         help="re-roll a frozen set; only honest before any result has been seen",
     )
 
+    embed = sub.add_parser("embed", help="encode abstracts into vectors (resumable)")
+    embed.add_argument("--limit", type=int, default=None)
+    embed.add_argument("--batch-size", type=int, default=32)
+
     run_eval = sub.add_parser("eval", help="measure a retriever against the frozen set")
     run_eval.add_argument("--split", choices=("dev", "test"), default="dev")
     run_eval.add_argument("--limit", type=int, default=None)
+    run_eval.add_argument("--retriever", choices=("lexical", "dense"), default="lexical")
 
     args = parser.parse_args(argv)
     _logging(args.verbose)
@@ -100,15 +106,35 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         return 0
 
+    if args.command == "embed":
+        with session_scope() as session:
+            result = encode_corpus(session, limit=args.limit, batch_size=args.batch_size)
+            result["total_encoded"] = encoded_count(session)
+        print(json.dumps(result, indent=2))
+        return 0
+
     if args.command == "eval":
         with session_scope() as session:
-            def retriever(query: str, k: int, exclude: str) -> list[str]:
-                return search(session, query, k=k, exclude=exclude)
+            if args.retriever == "dense":
+                index = DenseIndex.load(session)
+                if not len(index):
+                    print(json.dumps({"error": "nothing encoded; run `embed` first"}))
+                    return 1
+
+                def retriever(query: str, k: int, exclude: str) -> list[str]:
+                    return index.search(query, k=k, exclude=exclude)
+            else:
+
+                def retriever(query: str, k: int, exclude: str) -> list[str]:
+                    return search(session, query, k=k, exclude=exclude)
 
             result = {
+                "retriever": args.retriever,
                 "coverage": coverage(session),
                 **evaluate(session, retriever, split=args.split, limit=args.limit),
             }
+            if args.retriever == "dense":
+                result["index_size"] = len(index)
         print(json.dumps(result, indent=2))
         return 0
 
