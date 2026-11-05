@@ -87,6 +87,7 @@ async def ingest_corpus(
     page = 0
     seen = succeeded = quarantined = 0
     error: str | None = None
+    expected: int | None = None
 
     try:
         while cursor:
@@ -108,6 +109,11 @@ async def ingest_corpus(
                     )
                 log.error("page fetch failed", extra={"run_id": run_id, "page": page})
                 break
+
+            # What the source says exists, read once from the first page. A
+            # run has no way to know it was short without it.
+            if expected is None:
+                expected = (payload.get("meta") or {}).get("count")
 
             records = payload.get("results") or []
             if not records:
@@ -143,6 +149,21 @@ async def ingest_corpus(
         if owns_client:
             await client.aclose()
 
+    # A walk that ends early looks exactly like a walk that finished: the
+    # cursor simply stops. Without this check the first full run reported
+    # "succeeded" having collected 49.5% of the corpus, and nothing anywhere
+    # disagreed. Completeness is the property worth asserting, so it is
+    # asserted rather than assumed.
+    if error is None and expected and max_records is None and seen < expected:
+        missing = expected - seen
+        if missing > max(50, int(expected * 0.01)):
+            error = (
+                f"incomplete: the source reported {expected:,} records and the "
+                f"walk ended after {seen:,} ({100 * seen / expected:.1f}%). "
+                "The cursor stopped early; ingest in narrower slices."
+            )
+            log.error("ingest incomplete", extra={"expected": expected, "seen": seen})
+
     with session_scope(db_url) as session:
         run = session.get(IngestRun, run_id)
         run.requested = seen
@@ -160,6 +181,7 @@ async def ingest_corpus(
         "run_id": run_id,
         "status": status,
         "pages": page,
+        "expected": expected,
         "requested": seen,
         "succeeded": succeeded,
         "quarantined": quarantined,

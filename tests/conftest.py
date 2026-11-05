@@ -45,5 +45,9 @@ def work(identifier: str, *, title="A paper", year=2020, refs=(), abstract="hell
     }
 
 
-def page(records, *, next_cursor=None):
-    return {"meta": {"count": len(records), "next_cursor": next_cursor}, "results": records}
+def page(records, *, next_cursor=None, count=None):
+    """`count` overrides meta.count, so a short walk can be simulated."""
+    return {
+        "meta": {"count": len(records) if count is None else count, "next_cursor": next_cursor},
+        "results": records,
+    }

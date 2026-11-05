@@ -177,3 +177,52 @@ async def test_a_page_that_will_not_load_fails_the_run_rather_than_truncating(db
     with session_scope() as session:
         run = session.scalars(select(IngestRun)).one()
         assert run.error is not None
+
+
+async def test_a_walk_that_ends_early_is_not_reported_as_a_success(db, mock_client):
+    """The first real run collected 49.5% of the corpus and said "succeeded".
+
+    OpenAlex ended the cursor itself after 169 full pages while reporting
+    68,225 records available, and a walk that stops early is indistinguishable
+    from one that finished - the cursor simply stops either way. Nothing in
+    the run, the logs or the database disagreed. Completeness has to be
+    checked against what the source claimed, because nothing else will.
+    """
+    pages = {"*": page([work(f"W{i}") for i in range(200)], count=68225, next_cursor=None)}
+
+    summary = await ingest_corpus(
+        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+    )
+
+    assert summary["succeeded"] == 200
+    assert summary["expected"] == 68225
+    assert summary["status"] == "partial"
+    assert "incomplete" in summary["error"]
+    assert "68,225" in summary["error"]
+
+
+async def test_a_complete_walk_is_not_flagged(db, mock_client):
+    pages = {"*": page([work("W1"), work("W2")], next_cursor=None)}
+
+    summary = await ingest_corpus(
+        2018, 2021, client=mock_client(responder(pages)), raw_directory=str(db / "raw")
+    )
+
+    assert summary["status"] == "succeeded"
+    assert summary["error"] is None
+
+
+async def test_an_explicit_limit_is_not_an_incomplete_walk(db, mock_client):
+    """Asking for 200 of 68,225 and getting 200 is the limit working."""
+    pages = {"*": page([work(f"W{i}") for i in range(200)], count=68225, next_cursor="c2")}
+
+    summary = await ingest_corpus(
+        2018,
+        2021,
+        max_records=200,
+        client=mock_client(responder(pages)),
+        raw_directory=str(db / "raw"),
+    )
+
+    assert summary["status"] == "succeeded"
+    assert summary["error"] is None
