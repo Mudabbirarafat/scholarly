@@ -64,6 +64,38 @@ measured before any code was written and all recorded in
   walked in monthly slices with a retry, and every walk is checked against the
   count the source reports. 120 slices, 0 incomplete.
 
+## First measured result
+
+BM25 over 114,601 abstracts, 500 held-out dev queries, no model involved:
+
+| | |
+|---|---|
+| `recall@10` | **0.106** |
+| `recall@50` | **0.193** |
+| `MRR@50` | **0.176** |
+| relevant documents per query | 7.48 |
+| latency | p50 **396 ms**, p95 579 ms |
+
+**Quote the ceiling beside the number or the number is meaningless.** Only
+14.7% of citation edges point at documents this index holds; the other 85.3%
+are journal and conference publications an arXiv-only corpus cannot contain,
+and the qrels exclude them. Recall is therefore measured against what a
+perfect retriever *could* return, not against every work the paper cited.
+
+Two things this baseline already says:
+
+- **It is a real floor, not a strawman.** Finding one in ten retrievable
+  references from an abstract, with no model, is the bar a dense retriever has
+  to clear to justify its existence. Without this number, "the embeddings work"
+  would be an opinion.
+- **Latency is the problem, not recall.** 396 ms at the median is well past
+  the 300 ms this is supposed to serve in, and it comes from running a
+  40-term OR across the whole index. That is a finding about the baseline,
+  and it belongs in the ablation rather than being quietly tuned away.
+
+The test split — 1,500 queries — has not been looked at and will not be until
+there is something worth deciding with it.
+
 ## Why the pipeline exists
 
 Serving tiers are small and CI runners are not. Embedding a corpus needs memory

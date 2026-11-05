@@ -86,6 +86,25 @@ class Citation(Base):
     cited_id: Mapped[str] = mapped_column(String(32))
 
 
+class EvalQuery(Base):
+    """A paper frozen into the evaluation set, and which split it belongs to.
+
+    Stored rather than computed on demand, because a query set that is
+    re-derived each run silently changes as the corpus grows - and then two
+    numbers measured a week apart are not comparable, while looking exactly
+    as though they are.
+    """
+
+    __tablename__ = "eval_queries"
+
+    paper_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("papers.id", ondelete="CASCADE"), primary_key=True
+    )
+    split: Mapped[str] = mapped_column(String(8), index=True)
+    relevant_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class IngestRun(Base):
     """What one run asked for and what it got.
 

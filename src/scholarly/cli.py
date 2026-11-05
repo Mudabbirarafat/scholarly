@@ -9,7 +9,9 @@ import sys
 from sqlalchemy import func, select
 
 from scholarly.db import init_db, session_scope
+from scholarly.evaluation import build_query_set, coverage, evaluate
 from scholarly.ingest import ingest_span
+from scholarly.lexical import build_index, search
 from scholarly.models import Citation, IngestRun, Paper
 
 
@@ -49,6 +51,22 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("status", help="what is in the warehouse")
 
+    index = sub.add_parser("index", help="build the full-text index over abstracts")
+    index.add_argument("--rebuild", action="store_true")
+
+    freeze = sub.add_parser("freeze", help="choose and freeze the evaluation query set")
+    freeze.add_argument("--size", type=int, default=2000)
+    freeze.add_argument("--dev-fraction", type=float, default=0.25)
+    freeze.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="re-roll a frozen set; only honest before any result has been seen",
+    )
+
+    run_eval = sub.add_parser("eval", help="measure a retriever against the frozen set")
+    run_eval.add_argument("--split", choices=("dev", "test"), default="dev")
+    run_eval.add_argument("--limit", type=int, default=None)
+
     args = parser.parse_args(argv)
     _logging(args.verbose)
     init_db(args.database_url)
@@ -64,6 +82,35 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(summary, indent=2))
         return 0 if summary["status"] != "failed" else 1
+
+    if args.command == "index":
+        with session_scope() as session:
+            rows = build_index(session, rebuild=args.rebuild)
+        print(json.dumps({"indexed": rows}, indent=2))
+        return 0
+
+    if args.command == "freeze":
+        with session_scope() as session:
+            result = build_query_set(
+                session,
+                size=args.size,
+                dev_fraction=args.dev_fraction,
+                rebuild=args.rebuild,
+            )
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.command == "eval":
+        with session_scope() as session:
+            def retriever(query: str, k: int, exclude: str) -> list[str]:
+                return search(session, query, k=k, exclude=exclude)
+
+            result = {
+                "coverage": coverage(session),
+                **evaluate(session, retriever, split=args.split, limit=args.limit),
+            }
+        print(json.dumps(result, indent=2))
+        return 0
 
     if args.command == "status":
         with session_scope() as session:
