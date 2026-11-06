@@ -13,7 +13,13 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "noEmit": true
+    "noEmit": true,
+
+    // Empty on purpose. TypeScript otherwise pulls ambient @types from any
+    // node_modules up the directory tree, and one sitting in a home
+    // directory made this project typecheck locally while failing in CI.
+    // What the project needs is referenced explicitly in src/vite-env.d.ts.
+    "types": []
   },
   "include": ["src", "vite.config.ts"]
 }
