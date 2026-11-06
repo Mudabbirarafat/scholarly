@@ -6,6 +6,10 @@ Semantic search over computer-science paper abstracts, where the interesting
 part is not the search — it is that the search publishes how often it is right,
 and a change that makes it worse fails the build.
 
+**Live: [scholarly-jet.vercel.app](https://scholarly-jet.vercel.app)** — UI on
+Vercel, API on a free Render instance that sleeps, so the first request after a
+quiet spell wakes it and the page says so while it does.
+
 ## The result
 
 Dense retrieval beats BM25 on the same corpus, the same frozen queries and the
@@ -209,8 +213,14 @@ that split rather than putting both in one place.
 Stated plainly, because the claims above are the ones this repository can
 currently support:
 
-- **Not deployed yet.** It runs locally, end to end, and the deployment
-  configuration is written and explained — but no URL exists to hand anyone.
+- **The deployed instance is slower than the measurement.** The published
+  `p50` of 133 ms came from a four-core CI runner. On Render's free tier,
+  which is a tenth of a CPU, embedding one query takes about 780 ms. The index
+  search is unaffected — only the encoder is CPU-bound — but the number a
+  visitor feels is not the number in the table above, and pretending otherwise
+  would be the sort of thing this project exists not to do.
+- **The deployed index is 5,000 documents, not 114,581.** The bundle is
+  committed rather than fetched, and the page says which it is holding.
 - **No ablation.** Reciprocal-rank fusion over both retrievers, a cross-encoder
   reranker and float16 vectors are one row each in a table that does not exist
   yet. The harness takes any `search_fn`, so each is a measurement rather than

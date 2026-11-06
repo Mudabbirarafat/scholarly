@@ -69,7 +69,7 @@ load instead would hand the first visitor a gateway timeout.
 
 ## 3. The UI on Vercel
 
-**New Project → import the repo**, then set **Root Directory** to `web`.
+**New Project → import the repo → "Import web as a project"**, which sets **Root Directory** to `web`.
 Vercel detects Vite; `web/vercel.json` pins the build anyway.
 
 Nothing else to configure. `web/vercel.json` already rewrites `/api/*` to the
