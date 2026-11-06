@@ -73,11 +73,20 @@ class Hit:
 
 @dataclass
 class VectorIndex:
-    """float16 vectors in memory, searched by chunked dot product."""
+    """Vectors in memory, searched by chunked dot product.
+
+    One class, used by both the serving process and the evaluation harness.
+    That is deliberate: when the thing measured and the thing deployed are
+    separate implementations, the published number describes something nobody
+    runs, and the difference shows up as a mystery rather than an error. The
+    dtype is the only knob, so `eval --dtype float32` and the live instance
+    differ in exactly one respect and the cost of that respect is measurable.
+    """
 
     ids: list[str]
     matrix: np.ndarray
     model: str
+    dtype: np.dtype = np.dtype(np.float16)
 
     @classmethod
     def load(
@@ -86,8 +95,10 @@ class VectorIndex:
         *,
         model_name: str | None = None,
         limit: int | None = None,
+        dtype: np.dtype | type = np.float16,
     ) -> "VectorIndex":
         name = model_name or embeddings.DEFAULT_MODEL
+        want = np.dtype(dtype)
         statement = (
             select(Embedding.paper_id, Embedding.vector)
             .where(Embedding.model == name)
@@ -105,7 +116,7 @@ class VectorIndex:
         # intermediate list is the peak, not the result.
         for paper_id, blob in session.execute(statement).yield_per(2048):
             ids.append(paper_id)
-            pending.append(embeddings.from_blob(blob).astype(np.float16))
+            pending.append(embeddings.from_blob(blob).astype(want))
             if len(pending) >= CHUNK:
                 blocks.append(np.stack(pending))
                 pending.clear()
@@ -115,18 +126,19 @@ class VectorIndex:
         if blocks:
             matrix = np.concatenate(blocks) if len(blocks) > 1 else blocks[0]
         else:
-            matrix = np.zeros((0, embeddings.DIMENSIONS), dtype=np.float16)
+            matrix = np.zeros((0, embeddings.DIMENSIONS), dtype=want)
         del blocks
 
         log.info(
             "index loaded",
             extra={
                 "vectors": len(ids),
+                "dtype": want.name,
                 "mib": round(matrix.nbytes / 1048576, 1),
                 "seconds": round(time.perf_counter() - started, 1),
             },
         )
-        return cls(ids=ids, matrix=matrix, model=name)
+        return cls(ids=ids, matrix=matrix, model=name, dtype=want)
 
     def __len__(self) -> int:
         return len(self.ids)
@@ -141,7 +153,12 @@ class VectorIndex:
         out = np.empty(self.matrix.shape[0], dtype=np.float32)
         for start in range(0, self.matrix.shape[0], CHUNK):
             block = self.matrix[start : start + CHUNK]
-            out[start : start + CHUNK] = block.astype(np.float32) @ query
+            # Already float32 means no upcast and no copy; the chunking still
+            # applies, so both dtypes take the same path through the same
+            # arithmetic and only the stored precision differs.
+            if block.dtype != np.float32:
+                block = block.astype(np.float32)
+            out[start : start + CHUNK] = block @ query
         return out
 
     def search(
@@ -300,7 +317,7 @@ class SearchService:
                 "documents": len(self.index) if self.index else 0,
                 "model": self.index.model if self.index else None,
                 "megabytes": self.index.megabytes if self.index else 0.0,
-                "dtype": "float16",
+                "dtype": self.index.dtype.name if self.index else "float16",
             },
             "quality": self.quality,
         }

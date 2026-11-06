@@ -74,7 +74,7 @@ jobs:
       - name: Evaluate both retrievers on the dev split
         run: |
           python -m scholarly.cli eval --split dev --retriever lexical | tee lexical.json
-          python -m scholarly.cli eval --split dev --retriever dense   | tee dense.json
+          python -m scholarly.cli eval --split dev --retriever dense --dtype float16 | tee dense.json
 
       - name: The gate
         # A rebuild that retrieves worse than the lexical floor does not get
@@ -137,7 +137,10 @@ jobs:
               "SELECT COUNT(*) FROM papers WHERE abstract IS NOT NULL").fetchone()[0]
 
           def metrics(source):
-              keys = ("recall@10", "recall@50", "mrr@50", "p50_ms", "p95_ms", "index_size")
+              keys = (
+                  "recall@10", "recall@50", "mrr@50",
+                  "p50_ms", "p95_ms", "index_size", "dtype",
+              )
               return {k: source[k] for k in keys if k in source}
 
           quality = {

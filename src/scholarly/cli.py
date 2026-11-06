@@ -8,13 +8,15 @@ import sys
 
 from sqlalchemy import func, select
 
+from scholarly import embeddings
 from scholarly.bundle import build_bundle
 from scholarly.db import init_db, session_scope
-from scholarly.dense import DenseIndex, encode_corpus, encoded_count
+from scholarly.dense import encode_corpus, encoded_count
 from scholarly.evaluation import build_query_set, coverage, evaluate
 from scholarly.ingest import ingest_span
 from scholarly.lexical import build_index, search
 from scholarly.models import Citation, IngestRun, Paper
+from scholarly.serving import VectorIndex
 
 
 def _logging(verbose: bool) -> None:
@@ -82,6 +84,12 @@ def main(argv: list[str] | None = None) -> int:
     run_eval.add_argument("--split", choices=("dev", "test"), default="dev")
     run_eval.add_argument("--limit", type=int, default=None)
     run_eval.add_argument("--retriever", choices=("lexical", "dense"), default="lexical")
+    run_eval.add_argument(
+        "--dtype",
+        choices=("float16", "float32"),
+        default="float16",
+        help="vector precision; float16 is what the deployed instance searches",
+    )
 
     args = parser.parse_args(argv)
     _logging(args.verbose)
@@ -138,13 +146,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "eval":
         with session_scope() as session:
             if args.retriever == "dense":
-                index = DenseIndex.load(session)
+                index = VectorIndex.load(session, dtype=args.dtype)
                 if not len(index):
                     print(json.dumps({"error": "nothing encoded; run `embed` first"}))
                     return 1
 
                 def retriever(query: str, k: int, exclude: str) -> list[str]:
-                    return index.search(query, k=k, exclude=exclude)
+                    # The query is embedded here rather than inside the
+                    # index, so the index does one job and the harness
+                    # measures the same call the request handler makes.
+                    vector = next(embeddings.encode([query]))
+                    return [
+                        paper_id
+                        for paper_id, _ in index.search(vector, k=k, exclude=exclude)
+                    ]
             else:
 
                 def retriever(query: str, k: int, exclude: str) -> list[str]:
@@ -157,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
             }
             if args.retriever == "dense":
                 result["index_size"] = len(index)
+                result["dtype"] = index.dtype.name
+                result["index_mib"] = index.megabytes
         print(json.dumps(result, indent=2))
         return 0
 

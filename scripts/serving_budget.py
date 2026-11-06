@@ -169,7 +169,7 @@ def stage_index(documents: int, *, naive: bool = False) -> None:
     print(f"best score {scores[top].max():.4f}")
 
 
-def stage_both(documents: int) -> None:
+def stage_both(documents: int, *, dtype: str = "float16") -> None:
     report("python + numpy")
     from fastembed import TextEmbedding
 
@@ -177,14 +177,15 @@ def stage_both(documents: int) -> None:
     report("encoder loaded")
 
     rng = np.random.default_rng(0)
-    half = np.empty((documents, DIMENSIONS), dtype=np.float16)
+    want = np.dtype(dtype)
+    half = np.empty((documents, DIMENSIONS), dtype=want)
     for start in range(0, documents, 16384):
         block = rng.standard_normal((min(16384, documents - start), DIMENSIONS), dtype=np.float32)
         block /= np.linalg.norm(block, axis=1, keepdims=True)
-        half[start : start + block.shape[0]] = block.astype(np.float16)
+        half[start : start + block.shape[0]] = block.astype(want)
     del block
     gc.collect()
-    report("float16 index loaded beside encoder")
+    report(f"{want.name} index loaded beside encoder")
 
     query = np.array(next(iter(model.embed([QUERY]))), dtype=np.float32)
     report("query embedded")
@@ -206,6 +207,12 @@ def main() -> int:
     parser.add_argument("stage", choices=("encoder", "index", "both"))
     parser.add_argument("--documents", type=int, default=114581)
     parser.add_argument(
+        "--dtype",
+        choices=("float16", "float32"),
+        default="float16",
+        help="stored precision; float16 halves the index and costs an upcast per query",
+    )
+    parser.add_argument(
         "--naive",
         action="store_true",
         help="also time the whole-matrix upcast, to show what it costs",
@@ -218,7 +225,7 @@ def main() -> int:
     elif args.stage == "index":
         stage_index(args.documents, naive=args.naive)
     else:
-        stage_both(args.documents)
+        stage_both(args.documents, dtype=args.dtype)
     return 0
 
 

@@ -88,6 +88,25 @@ def test_chunked_scoring_agrees_with_the_whole_matrix(corpus, monkeypatch):
     assert np.allclose(chunked, naive, atol=1e-3)
 
 
+def test_halving_the_index_does_not_change_the_answer(corpus):
+    """float16 is the deployed storage and float32 is what the published
+    numbers were measured on. Those have to be the same retriever, or the
+    measurement describes something nobody runs. The real size of the
+    difference is measured over the frozen query set by
+    `scripts/float16_cost.py`; this just holds the floor."""
+    with session_scope() as session:
+        half = VectorIndex.load(session, dtype=np.float16)
+        full = VectorIndex.load(session, dtype=np.float32)
+
+    assert half.matrix.nbytes * 2 == full.matrix.nbytes
+    assert half.dtype.name == "float16" and full.dtype.name == "float32"
+
+    query = fake_vector("transformer attention")
+    assert np.allclose(half.scores(query), full.scores(query), atol=1e-3)
+    # The on-topic pair comes back from both; the other two tie at zero.
+    assert {i for i, _ in half.search(query, k=2)} == {i for i, _ in full.search(query, k=2)}
+
+
 def test_an_empty_index_answers_instead_of_failing(db):
     with session_scope() as session:
         index = VectorIndex.load(session)

@@ -205,6 +205,42 @@ into a 168 MiB temporary, and the service runs one worker — two would each
 load their own encoder and index, and 580 MB on a 512 MB box is an
 out-of-memory kill rather than a slow page.
 
+### What float16 actually costs
+
+The published recall was computed on exact vectors while the instance searches
+halved ones, which was worth a number rather than a shrug. Both arms run the
+same index class over the same frozen queries with one difference, measured by
+[`scripts/float16_cost.py`](scripts/float16_cost.py):
+
+| over 250 dev queries | float32 | float16 |
+|---|---|---|
+| `recall@10` | 0.0145 | 0.0145 |
+| `recall@50` | 0.0247 | 0.0247 |
+| `MRR@50` | 0.0458 | 0.0454 |
+
+Top-10 results agree with a mean Jaccard of 0.9985 and are identically
+*ordered* 91.6% of the time, with a largest score difference of 0.000118. So
+the retrieval cost of halving the index is, as far as this query set can
+resolve, nothing: the same documents come back, occasionally swapped where
+scores were already tied to four decimal places.
+
+**The cost is latency, not quality, and it is larger than expected.** Over the
+whole corpus, float16 searches in 150 ms and float32 in 68 ms, because every
+chunk is upcast on its way into the matrix multiply while float32 is already
+in the right type. Measured on the full 114,581 vectors:
+
+| | float16 | float32 |
+|---|---|---|
+| resident | 291 MB (peak 325) | 375 MB (peak 420) |
+| search | 150 ms | 68 ms |
+
+float32 fits too. It stays float16 anyway, and now for a stated reason rather
+than an assumption: the trade is 84 MB of headroom against 82 ms, the peak
+with float32 reaches 420 MB of a 512 MB cap, and on the deployed instance 82 ms
+is small beside the ~780 ms the encoder spends on a tenth of a CPU. Headroom
+is what stops an out-of-memory kill; latency there is dominated by something
+else entirely.
+
 [`DEPLOY.md`](DEPLOY.md) has the rest: UI on Vercel, API on Render, and why
 that split rather than putting both in one place.
 
@@ -225,10 +261,6 @@ currently support:
   reranker and float16 vectors are one row each in a table that does not exist
   yet. The harness takes any `search_fn`, so each is a measurement rather than
   a rewrite.
-- **float16 is served but measured in float32.** The published recall was
-  computed on exact vectors while the instance searches halved ones. The
-  difference is almost certainly a rounding error, and "almost certainly" is
-  the sort of phrase this project exists to replace with a number.
 - **No migrations.** Schema comes from `create_all`; the warehouse is rebuilt
   from source rather than migrated.
 
@@ -247,10 +279,10 @@ src/scholarly/bundle.py             the small database a deployed instance reads
 src/scholarly/api.py                health, search, and warming up honestly
 src/scholarly/cli.py                one command per pipeline step
 web/                                React UI: both retrievers, side by side
-scripts/serving_budget.py           what serving costs in memory, measured
+scripts/                            what serving costs, and what float16 costs
 .github/workflows/pipeline.yml      ingest → index → freeze → encode → eval → gate
 docs/corpus-decisions.md            what was measured, and what it changed
-tests/                              95 tests
+tests/                              92 tests
 ```
 
 ## Running it

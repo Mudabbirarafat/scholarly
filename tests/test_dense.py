@@ -10,8 +10,9 @@ import pytest
 
 from scholarly import embeddings
 from scholarly.db import session_scope
-from scholarly.dense import DenseIndex, encode_corpus, encoded_count, pending
+from scholarly.dense import encode_corpus, encoded_count, pending
 from scholarly.models import Embedding, Paper
+from scholarly.serving import VectorIndex
 
 # A toy semantic space: each axis is a topic, so "attention transformer" and
 # "transformer sequence" land near each other and far from "tomatoes".
@@ -92,55 +93,7 @@ def test_the_model_is_stored_with_the_vector(db):
     with session_scope() as session:
         stored = {row.model for row in session.query(Embedding).all()}
         assert stored == {"model-a", "model-b"}
-        assert len(DenseIndex.load(session, model_name="model-a")) == 1
-
-
-def test_search_ranks_by_similarity(db):
-    with session_scope() as session:
-        add(session, "W1", "transformer attention attention")
-        add(session, "W2", "garden garden garden")
-        add(session, "W3", "transformer transformer attention")
-
-    with session_scope() as session:
-        encode_corpus(session, model_name="m")
-        index = DenseIndex.load(session, model_name="m")
-        found = index.search("transformer attention", k=3)
-
-    assert found[0] in {"W1", "W3"}
-    assert found[-1] == "W2"
-
-
-def test_the_query_paper_is_excluded(db):
-    with session_scope() as session:
-        add(session, "W1", "transformer attention")
-        add(session, "W2", "transformer attention")
-
-    with session_scope() as session:
-        encode_corpus(session, model_name="m")
-        index = DenseIndex.load(session, model_name="m")
-
-    assert "W1" not in index.search("transformer attention", k=5, exclude="W1")
-    assert "W1" in index.search("transformer attention", k=5)
-
-
-def test_an_empty_index_returns_nothing_rather_than_failing(db):
-    with session_scope() as session:
-        index = DenseIndex.load(session, model_name="m")
-    assert len(index) == 0
-    assert index.search("anything", k=5) == []
-
-
-def test_fewer_documents_than_k_is_not_an_error(db):
-    """argpartition raises if asked for more neighbours than there are
-    vectors, which is exactly what a small or half-encoded index looks like."""
-    with session_scope() as session:
-        add(session, "W1", "transformer")
-
-    with session_scope() as session:
-        encode_corpus(session, model_name="m")
-        index = DenseIndex.load(session, model_name="m")
-
-    assert index.search("transformer", k=50) == ["W1"]
+        assert len(VectorIndex.load(session, model_name="model-a")) == 1
 
 
 def test_a_bounded_encode_samples_the_corpus_rather_than_one_end_of_it(db):
