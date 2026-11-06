@@ -16,14 +16,38 @@ jobs:
           python-version: '3.12'
           cache: pip
 
+      # The serving extra as well: the API tests need FastAPI, and a suite
+      # that skips them locally would be a suite that tests less than it
+      # appears to.
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,serve]"
 
       - name: Lint
         run: ruff check .
 
       - name: Tests
         run: pytest -q
+
+  # The UI is only as checked as its types are, which is not very - but a
+  # build that does not compile is worth catching here rather than in a
+  # Vercel deploy log.
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
 
   # The suite mocks OpenAlex, so this job is the one that notices when the API
   # changes shape underneath us - which it already has once: cursor paging

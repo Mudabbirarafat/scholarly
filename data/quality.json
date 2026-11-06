@@ -1,0 +1,36 @@
+{
+  "run": 42082656593,
+  "run_url": "https://github.com/Mudabbirarafat/scholarly/actions/runs/42082656593",
+  "commit": "27748ed",
+  "measured_at": "2026-11-05T23:08:03Z",
+  "corpus": {
+    "documents": 114581,
+    "citation_edges": 2644616,
+    "retrievable": 387468,
+    "retrievable_pct": 14.7
+  },
+  "queries": {
+    "split": "dev",
+    "count": 500,
+    "relevant_per_query": 7.48,
+    "pool": 47813,
+    "seed": "scholarly-v1",
+    "skipped": 0
+  },
+  "lexical": {
+    "recall@10": 0.1059,
+    "recall@50": 0.193,
+    "mrr@50": 0.1753,
+    "p50_ms": 194.1,
+    "p95_ms": 236.8
+  },
+  "dense": {
+    "recall@10": 0.1182,
+    "recall@50": 0.2422,
+    "mrr@50": 0.2214,
+    "p50_ms": 133.3,
+    "p95_ms": 169.6,
+    "index_size": 114581
+  },
+  "note": "Measured by the pipeline against a frozen query set on a complete index. The test split is untouched. Not recomputed at serving time: a number produced by a web process against whatever it happens to hold would look identical and mean nothing."
+}

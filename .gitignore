@@ -1,9 +1,21 @@
 __pycache__/
 *.pyc
 .venv/
-data/
-*.db
 .env
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Warehouses are built, not committed: the pipeline produces them and they
+# run to hundreds of megabytes.
+*.db
+!data/serving.db
+
+# Everything under data/ is generated except the published measurement, which
+# the UI reads and which has to be in the repository to be a published claim.
+data/*
+!data/quality.json
+!data/serving.db
+
+node_modules/
+web/dist/

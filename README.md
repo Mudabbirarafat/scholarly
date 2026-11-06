@@ -144,19 +144,57 @@ through ONNX Runtime — 384 dimensions, no torch, no CUDA, about 130 MB on
 disk. The vectors are 168 MiB, and because they are unit length, similarity
 over the whole corpus is one matrix multiply.
 
+## The interface
+
+Both retrievers, side by side, answering the same query. That is the whole
+design: the claim this project makes is a comparison, so the page shows the
+comparison rather than asking anyone to take it on faith.
+
+Each column says what it can and cannot tell you. BM25 highlights the terms it
+matched and shows no score, because FTS5's rank is not comparable to a cosine
+similarity. The dense column shows the similarity and highlights nothing,
+because the model never saw a term — highlighting words there would be a
+decoration that reads as an explanation.
+
+Underneath, the page reports what it is actually searching. When the deployed
+instance holds fewer documents than the published measurement was taken on, it
+says so in a banner, which is the same discipline the CI gate applies when it
+refuses to compare a partial index against BM25.
+
+Serving is sized by measurement rather than estimate
+(`scripts/serving_budget.py`, reproducible anywhere):
+
+```
+python + numpy                        30.7 MB
+encoder loaded                       203.0 MB
+float16 index beside it (114,581)    288.6 MB   peak 324.6
+search                               291.0 MB   150 ms
+```
+
+291 MB against a 512 MB instance, which decides three things: vectors are
+float16, scores are computed in chunks rather than upcasting the whole matrix
+into a 168 MiB temporary, and the service runs one worker — two would each
+load their own encoder and index, and 580 MB on a 512 MB box is an
+out-of-memory kill rather than a slow page.
+
+[`DEPLOY.md`](DEPLOY.md) has the rest: UI on Vercel, API on Render, and why
+that split rather than putting both in one place.
+
 ## What is not built yet
 
-Stated plainly, because the three claims above are the ones this repository can
+Stated plainly, because the claims above are the ones this repository can
 currently support:
 
-- **No UI and no serving deployment.** Search works from the CLI; nothing is
-  hosted. This is the next piece of work.
+- **Not deployed yet.** It runs locally, end to end, and the deployment
+  configuration is written and explained — but no URL exists to hand anyone.
 - **No ablation.** Reciprocal-rank fusion over both retrievers, a cross-encoder
   reranker and float16 vectors are one row each in a table that does not exist
   yet. The harness takes any `search_fn`, so each is a measurement rather than
   a rewrite.
-- **No per-result explanation.** Showing which passage matched, and what a
-  reranker did to the order, needs the UI above.
+- **float16 is served but measured in float32.** The published recall was
+  computed on exact vectors while the instance searches halved ones. The
+  difference is almost certainly a rounding error, and "almost certainly" is
+  the sort of phrase this project exists to replace with a number.
 - **No migrations.** Schema comes from `create_all`; the warehouse is rebuilt
   from source rather than migrated.
 
@@ -170,10 +208,15 @@ src/scholarly/lexical.py            SQLite FTS5 and BM25
 src/scholarly/embeddings.py         fastembed over ONNX, no torch
 src/scholarly/dense.py              encode once, resumably; rank by dot product
 src/scholarly/evaluation.py         frozen queries, qrels, recall/MRR, coverage
+src/scholarly/serving.py            float16 index, chunked scoring, one query in
+src/scholarly/bundle.py             the small database a deployed instance reads
+src/scholarly/api.py                health, search, and warming up honestly
 src/scholarly/cli.py                one command per pipeline step
+web/                                React UI: both retrievers, side by side
+scripts/serving_budget.py           what serving costs in memory, measured
 .github/workflows/pipeline.yml      ingest → index → freeze → encode → eval → gate
 docs/corpus-decisions.md            what was measured, and what it changed
-tests/                              56 tests
+tests/                              91 tests
 ```
 
 ## Running it
@@ -191,6 +234,14 @@ python -m scholarly.cli index --rebuild
 python -m scholarly.cli freeze --size 200
 python -m scholarly.cli embed --limit 2000 --batch-size 32
 python -m scholarly.cli eval --split dev --retriever dense
+```
+
+Then the interface, which needs both halves running:
+
+```bash
+python -m scholarly.cli bundle --out data/serving.db --limit 5000
+DATABASE_URL=sqlite:///data/serving.db python -m uvicorn scholarly.api:app --port 8000
+cd web && npm install && npm run dev
 ```
 
 `OPENALEX_API_KEY` and `OPENALEX_MAILTO` are optional and join a faster pool;

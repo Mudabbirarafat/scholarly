@@ -1,0 +1,40 @@
+# The API. Free tier, and every line here is sized by the measurement in
+# `scripts/serving_budget.py`: encoder 203 MB, float16 index 88 MB for the
+# full corpus, 291 MB together with 220 MB spare.
+#
+# The UI is not here. It is static, it belongs on a CDN, and keeping it on
+# Vercel means the page stays instant while this instance is asleep - so a
+# visitor sees "waking the index" instead of a blank tab.
+
+services:
+  - type: web
+    name: scholarly-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -e ".[serve]"
+
+    # `--workers 1` is not a default, it is a constraint. Each worker loads
+    # its own encoder and its own copy of the index: two workers is 580 MB on
+    # a 512 MB instance, which is an out-of-memory kill under the first
+    # concurrent request rather than a slow response.
+    startCommand: uvicorn scholarly.api:app --host 0.0.0.0 --port $PORT --workers 1
+
+    # Health answers while the index is still loading, by design, so this
+    # marks the instance live as soon as the port is open instead of waiting
+    # out the warmup and failing the deploy.
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DATABASE_URL
+        value: sqlite:///data/serving.db
+      - key: QUALITY_FILE
+        value: data/quality.json
+      # The Vercel origin, comma separated. Set in the dashboard rather than
+      # committed, because it changes with the project name and preview URLs.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"

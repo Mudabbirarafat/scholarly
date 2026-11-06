@@ -63,7 +63,7 @@ jobs:
         run: python -m scholarly.cli index --rebuild
 
       - name: Freeze the evaluation set
-        run: python -m scholarly.cli freeze --size 2000
+        run: python -m scholarly.cli freeze --size 2000 | tee freeze.json
 
       - name: Encode
         run: |
@@ -115,6 +115,68 @@ jobs:
               )
           EOF
 
+      - name: Publish the measurement the UI reads
+        # The interface shows these numbers and says which run produced them.
+        # Writing the file here, from the same JSON the gate judged, is what
+        # keeps the published claim and the gated claim the same claim.
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          python - <<'EOF'
+          import json, os, sqlite3, datetime
+
+          lex = json.load(open("lexical.json"))
+          dense = json.load(open("dense.json"))
+          frozen = json.load(open("freeze.json"))
+          coverage = dense.get("coverage", {})
+
+          db = sqlite3.connect("pipeline.db")
+          documents = db.execute(
+              "SELECT COUNT(*) FROM papers WHERE abstract IS NOT NULL").fetchone()[0]
+
+          def metrics(source):
+              keys = ("recall@10", "recall@50", "mrr@50", "p50_ms", "p95_ms", "index_size")
+              return {k: source[k] for k in keys if k in source}
+
+          quality = {
+              "run": int(os.environ["RUN_ID"]),
+              "run_url": os.environ["RUN_URL"],
+              "commit": os.environ["COMMIT"][:7],
+              "measured_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+              "corpus": {
+                  "documents": documents,
+                  "citation_edges": coverage.get("citation_edges"),
+                  "retrievable": coverage.get("retrievable"),
+                  "retrievable_pct": coverage.get("retrievable_pct"),
+              },
+              "queries": {
+                  "split": dense.get("split"),
+                  "count": dense.get("queries"),
+                  "relevant_per_query": dense.get("relevant_per_query"),
+                  "pool": frozen.get("pool"),
+                  "skipped": dense.get("skipped"),
+              },
+              "lexical": metrics(lex),
+              "dense": metrics(dense),
+              "note": (
+                  "Measured by the pipeline against a frozen query set. Not recomputed at "
+                  "serving time: a number produced by a web process against whatever it "
+                  "happens to hold would look identical and mean nothing."
+              ),
+          }
+          os.makedirs("data", exist_ok=True)
+          with open("data/quality.json", "w", encoding="utf-8") as handle:
+              json.dump(quality, handle, indent=2)
+          print(json.dumps(quality, indent=2))
+          EOF
+
+      - name: Build the serving bundle
+        # What a deployed instance actually reads: papers, vectors, a
+        # full-text index, and none of the 2.6 million citation edges.
+        run: python -m scholarly.cli bundle --out data/serving.db --limit 5000
+
       - name: Keep the vectors
         if: always()
         uses: actions/upload-artifact@v4
@@ -124,4 +186,6 @@ jobs:
             pipeline.db
             lexical.json
             dense.json
+            data/quality.json
+            data/serving.db
           retention-days: 14

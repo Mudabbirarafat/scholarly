@@ -8,6 +8,7 @@ import sys
 
 from sqlalchemy import func, select
 
+from scholarly.bundle import build_bundle
 from scholarly.db import init_db, session_scope
 from scholarly.dense import DenseIndex, encode_corpus, encoded_count
 from scholarly.evaluation import build_query_set, coverage, evaluate
@@ -68,6 +69,15 @@ def main(argv: list[str] | None = None) -> int:
     embed.add_argument("--limit", type=int, default=None)
     embed.add_argument("--batch-size", type=int, default=32)
 
+    bundle = sub.add_parser("bundle", help="write a compact database for serving")
+    bundle.add_argument("--out", default="data/serving.db")
+    bundle.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="serve this many documents instead of every encoded one",
+    )
+
     run_eval = sub.add_parser("eval", help="measure a retriever against the frozen set")
     run_eval.add_argument("--split", choices=("dev", "test"), default="dev")
     run_eval.add_argument("--limit", type=int, default=None)
@@ -116,6 +126,14 @@ def main(argv: list[str] | None = None) -> int:
             result["total_encoded"] = encoded_count(session)
         print(json.dumps(result, indent=2))
         return 0
+
+    if args.command == "bundle":
+        with session_scope() as session:
+            summary = build_bundle(session, args.out, limit=args.limit)
+        print(json.dumps(summary, indent=2))
+        # An inconsistent bundle is worse than no bundle: it serves, and it
+        # serves a corpus whose two retrievers can reach different documents.
+        return 1 if summary.get("warning") else 0
 
     if args.command == "eval":
         with session_scope() as session:
