@@ -161,6 +161,30 @@ instance holds fewer documents than the published measurement was taken on, it
 says so in a banner, which is the same discipline the CI gate applies when it
 refuses to compare a partial index against BM25.
 
+Two queries, run against the same index, show why a single number would have
+been the wrong thing to publish:
+
+> **"why do overparameterised networks generalise"** — dense returns *On the
+> Margin Theory of Feedforward Neural Networks*, *On Generalization of
+> Adaptive Methods for Over-parameterized Linear Regression*, *DNNs as Layers
+> of Cooperating Classifiers*. BM25 returns four papers whose only connection
+> is the word "generalise", one of them about corpus linguistics. None of the
+> query's other words appear anywhere in the corpus in that form, and BM25 has
+> nothing else to go on.
+
+> **"contrastive learning of visual representations without labels"** — BM25's
+> top hit is *A Simple Framework for Contrastive Learning of Visual
+> Representations*, which is SimCLR, which is the right answer. Dense ranks it
+> lower and leads with *What Should Not Be Contrastive in Contrastive
+> Learning*.
+
+The second case is the one worth dwelling on. When the query is already
+written in the corpus's vocabulary, the lexical retriever is not a baseline
+to be beaten — it is simply correct, and faster to build. The published
+`recall@10` of 0.1182 against 0.1059 is an average over 500 queries that
+includes both kinds, which is why it is a modest number rather than a
+triumphant one.
+
 Serving is sized by measurement rather than estimate
 (`scripts/serving_budget.py`, reproducible anywhere):
 
@@ -216,7 +240,7 @@ web/                                React UI: both retrievers, side by side
 scripts/serving_budget.py           what serving costs in memory, measured
 .github/workflows/pipeline.yml      ingest → index → freeze → encode → eval → gate
 docs/corpus-decisions.md            what was measured, and what it changed
-tests/                              91 tests
+tests/                              95 tests
 ```
 
 ## Running it

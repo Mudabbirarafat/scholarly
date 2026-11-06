@@ -197,6 +197,79 @@ def test_without_an_index_lexical_still_serves(corpus):
     assert "dense" not in result["results"]
 
 
+class FakeStream:
+    """Enough of an httpx streaming response to exercise the download."""
+
+    def __init__(self, chunks, status=200):
+        self._chunks = chunks
+        self.status = status
+
+    def raise_for_status(self):
+        if self.status >= 400:
+            raise RuntimeError(f"HTTP {self.status}")
+
+    def iter_bytes(self, _size=None):
+        yield from self._chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def test_a_bundle_already_on_disk_is_not_downloaded_again(tmp_path, monkeypatch):
+    import httpx
+
+    target = tmp_path / "serving.db"
+    target.write_bytes(b"x" * 2048)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("should not have gone to the network")
+
+    monkeypatch.setattr(httpx, "stream", explode)
+    assert serving.ensure_bundle("https://example.test/b.db", target)["bundle"] == "present"
+
+
+def test_no_url_and_no_file_says_so_rather_than_failing(tmp_path):
+    """A missing bundle is a configuration problem the health endpoint should
+    be able to report, not an exception during startup."""
+    result = serving.ensure_bundle(None, tmp_path / "absent.db")
+    assert result["bundle"] == "missing"
+
+
+def test_the_bundle_is_downloaded_and_renamed_into_place(tmp_path, monkeypatch):
+    import httpx
+
+    payload = [b"SQLite format 3\x00", b"rest of the file"]
+    monkeypatch.setattr(httpx, "stream", lambda *a, **k: FakeStream(payload))
+
+    target = tmp_path / "nested" / "serving.db"
+    result = serving.ensure_bundle("https://example.test/b.db", target)
+
+    assert result["bundle"] == "downloaded"
+    assert target.read_bytes() == b"".join(payload)
+    # The partial file is renamed, not left beside the real one.
+    assert not target.with_suffix(target.suffix + ".part").exists()
+
+
+def test_a_failed_download_leaves_no_database_to_serve(tmp_path, monkeypatch):
+    """A half-written database is worse than a missing one: it opens, it
+    answers, and it is missing whatever arrived after the connection died."""
+    import httpx
+
+    def die(*args, **kwargs):
+        return FakeStream([b"partial"], status=503)
+
+    monkeypatch.setattr(httpx, "stream", die)
+    target = tmp_path / "serving.db"
+
+    with pytest.raises(RuntimeError):
+        serving.ensure_bundle("https://example.test/b.db", target)
+
+    assert not target.exists()
+
+
 def test_quality_is_read_from_a_file_not_computed(tmp_path):
     assert serving.load_quality(tmp_path / "missing.json") == {}
     path = tmp_path / "quality.json"

@@ -116,8 +116,21 @@ def build_bundle(
         papers = out.scalar(select(func.count()).select_from(Paper))
         vectors = out.scalar(select(func.count()).select_from(Embedding))
 
+    # This file is committed and downloaded, so its size is a feature rather
+    # than an implementation detail. Building it leaves free pages behind -
+    # inserts, then a dropped and rebuilt full-text index - and VACUUM gives
+    # them back. It cannot run inside a transaction, hence the autocommit.
+    before = target.stat().st_size
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.exec_driver_sql("VACUUM")
+
     engine.dispose()
     size = target.stat().st_size
+    if before != size:
+        log.info(
+            "vacuumed",
+            extra={"before_mib": round(before / 1048576, 1), "after_mib": round(size / 1048576, 1)},
+        )
 
     summary = {
         "path": str(target),
