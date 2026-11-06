@@ -72,34 +72,29 @@ load instead would hand the first visitor a gateway timeout.
 **New Project → import the repo**, then set **Root Directory** to `web`.
 Vercel detects Vite; `web/vercel.json` pins the build anyway.
 
-The UI calls `/api/*` on its own origin, so point that at Render one of two
-ways:
-
-**Environment variable** — simplest. In Vercel, set
-
-```
-VITE_API_BASE = https://<your-service>.onrender.com
-```
-
-then put the Vercel domain in Render's `ALLOWED_ORIGINS`, because this makes
-the calls cross-origin and CORS applies.
-
-**Or a rewrite** — no CORS, one origin. Add to `web/vercel.json`:
+Nothing else to configure. `web/vercel.json` already rewrites `/api/*` to the
+Render service:
 
 ```json
 "rewrites": [
-  { "source": "/api/:path*", "destination": "https://<your-service>.onrender.com/api/:path*" }
+  { "source": "/api/:path*", "destination": "https://scholarly-api-mf6f.onrender.com/api/:path*" }
 ]
 ```
 
-Leave `VITE_API_BASE` unset if you do this. The rewrite also hides the Render
-URL from the browser, which is the nicer result; the cost is editing a
-committed file when the service name changes.
+That is deliberate rather than the alternative. Vercel performs the rewrite
+server side, so the browser only ever talks to one origin: no CORS, nothing to
+keep in sync between two dashboards, and the Render URL is not exposed in the
+page. `ALLOWED_ORIGINS` and `VITE_API_BASE` both stay unset, and they exist
+for the other arrangement — point `VITE_API_BASE` at the API and list the
+Vercel domain in `ALLOWED_ORIGINS` if you would rather call it cross-origin.
+
+The one cost of the rewrite is that the service URL lives in a committed
+file, so renaming the Render service means editing it.
 
 ## 4. Check it
 
 ```bash
-curl https://<your-service>.onrender.com/api/health
+curl https://scholarly-api-mf6f.onrender.com/api/health
 ```
 
 `index.documents` should match the bundle, and `warmup.state` should reach
