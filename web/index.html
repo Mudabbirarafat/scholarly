@@ -9,6 +9,35 @@
       content="Semantic search over 114,581 computer-science abstracts, with the measured recall of both retrievers published beside the results."
     />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%94%8D%3C/text%3E%3C/svg%3E" />
+
+    <!--
+      Without these, this link pastes into a message, a chat or a post as a
+      bare URL: no title, no description, no picture. The page is the thing
+      being shown to people, so how it looks when someone shares it is part
+      of whether it gets opened at all.
+
+      The image is the app mid-comparison - both retrievers answering the
+      same query - because that picture is the project. A logo would not be.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://scholarly-jet.vercel.app/" />
+    <meta property="og:title" content="scholarly — search that publishes its own accuracy" />
+    <meta
+      property="og:description"
+      content="Semantic search over 114,581 computer-science abstracts. Dense retrieval and BM25 answer side by side, with the measured recall of both published beside the results."
+    />
+    <meta property="og:image" content="https://scholarly-jet.vercel.app/preview.jpg" />
+    <meta property="og:image:width" content="800" />
+    <meta property="og:image:height" content="500" />
+    <meta property="og:image:alt" content="The same query answered by a dense retriever and by BM25, side by side, with scores and matched terms." />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="scholarly — search that publishes its own accuracy" />
+    <meta
+      name="twitter:description"
+      content="Dense retrieval and BM25 on the same query, with the measured recall of both published beside the results."
+    />
+    <meta name="twitter:image" content="https://scholarly-jet.vercel.app/preview.jpg" />
   </head>
   <body>
     <div id="root"></div>

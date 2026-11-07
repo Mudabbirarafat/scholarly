@@ -13,8 +13,10 @@ from scholarly.bundle import build_bundle
 from scholarly.db import init_db, session_scope
 from scholarly.dense import encode_corpus, encoded_count
 from scholarly.evaluation import build_query_set, coverage, evaluate
+from scholarly.hybrid import DEFAULT_K, fuse_search
 from scholarly.ingest import ingest_span
 from scholarly.lexical import build_index, search
+from scholarly.lexical import corpus_size as lexical_corpus_size
 from scholarly.models import Citation, IngestRun, Paper
 from scholarly.serving import VectorIndex
 
@@ -83,7 +85,29 @@ def main(argv: list[str] | None = None) -> int:
     run_eval = sub.add_parser("eval", help="measure a retriever against the frozen set")
     run_eval.add_argument("--split", choices=("dev", "test"), default="dev")
     run_eval.add_argument("--limit", type=int, default=None)
-    run_eval.add_argument("--retriever", choices=("lexical", "dense"), default="lexical")
+    run_eval.add_argument(
+        "--retriever", choices=("lexical", "dense", "hybrid"), default="lexical"
+    )
+    run_eval.add_argument(
+        "--fusion-depth",
+        type=int,
+        default=50,
+        help="how deep each retriever is read before fusing (hybrid only)",
+    )
+    run_eval.add_argument(
+        "--allow-partial-index",
+        action="store_true",
+        help=(
+            "compare anyway when the retrievers cover different corpora; "
+            "the number is then not a verdict"
+        ),
+    )
+    run_eval.add_argument(
+        "--fusion-k",
+        type=int,
+        default=DEFAULT_K,
+        help="RRF damping; 60 is the published default and is not tuned here",
+    )
     run_eval.add_argument(
         "--dtype",
         choices=("float16", "float32"),
@@ -145,35 +169,79 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "eval":
         with session_scope() as session:
-            if args.retriever == "dense":
+            index = None
+
+            def lexical_retriever(query: str, k: int, exclude: str) -> list[str]:
+                return search(session, query, k=k, exclude=exclude)
+
+            def dense_retriever(query: str, k: int, exclude: str) -> list[str]:
+                # The query is embedded here rather than inside the index, so
+                # the index does one job and the harness measures the same
+                # call the request handler makes.
+                vector = next(embeddings.encode([query]))
+                return [
+                    paper_id for paper_id, _ in index.search(vector, k=k, exclude=exclude)
+                ]
+
+            if args.retriever in ("dense", "hybrid"):
                 index = VectorIndex.load(session, dtype=args.dtype)
                 if not len(index):
                     print(json.dumps({"error": "nothing encoded; run `embed` first"}))
                     return 1
 
-                def retriever(query: str, k: int, exclude: str) -> list[str]:
-                    # The query is embedded here rather than inside the
-                    # index, so the index does one job and the harness
-                    # measures the same call the request handler makes.
-                    vector = next(embeddings.encode([query]))
-                    return [
-                        paper_id
-                        for paper_id, _ in index.search(vector, k=k, exclude=exclude)
-                    ]
-            else:
+                # The two retrievers must cover the same documents or the
+                # comparison measures the corpus rather than the retriever.
+                # The CI gate already refuses this, but the gate is in the
+                # workflow and this command is what people run by hand - so
+                # the check belongs here too. It was written after a local
+                # ablation compared a complete lexical index against 6,200
+                # vectors and read the difference as a result.
+                searchable = lexical_corpus_size(session)
+                if len(index) < searchable and not args.allow_partial_index:
+                    print(
+                        json.dumps(
+                            {
+                                "error": (
+                                    f"the dense index holds {len(index):,} of the "
+                                    f"{searchable:,} documents the lexical index can reach, "
+                                    "so a comparison between them would measure the corpus, "
+                                    "not the retriever. Encode the rest, or pass "
+                                    "--allow-partial-index if you know the number is not a verdict."
+                                ),
+                                "dense_index": len(index),
+                                "lexical_index": searchable,
+                            },
+                            indent=2,
+                        )
+                    )
+                    return 1
 
-                def retriever(query: str, k: int, exclude: str) -> list[str]:
-                    return search(session, query, k=k, exclude=exclude)
+            if args.retriever == "dense":
+                retriever = dense_retriever
+            elif args.retriever == "lexical":
+                retriever = lexical_retriever
+            else:
+                # Both arms run against the same index and the same frozen
+                # queries, so any difference is the fusion rather than the
+                # setup.
+                retriever = fuse_search(
+                    [lexical_retriever, dense_retriever],
+                    depth=args.fusion_depth,
+                    k=args.fusion_k,
+                )
 
             result = {
                 "retriever": args.retriever,
                 "coverage": coverage(session),
                 **evaluate(session, retriever, split=args.split, limit=args.limit),
             }
-            if args.retriever == "dense":
+            if index is not None:
+                result["lexical_index"] = lexical_corpus_size(session)
                 result["index_size"] = len(index)
                 result["dtype"] = index.dtype.name
                 result["index_mib"] = index.megabytes
+            if args.retriever == "hybrid":
+                result["fusion"] = {"depth": args.fusion_depth, "k": args.fusion_k}
         print(json.dumps(result, indent=2))
         return 0
 

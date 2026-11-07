@@ -74,7 +74,11 @@ jobs:
       - name: Evaluate both retrievers on the dev split
         run: |
           python -m scholarly.cli eval --split dev --retriever lexical | tee lexical.json
-          python -m scholarly.cli eval --split dev --retriever dense --dtype float16 | tee dense.json
+          # --allow-partial-index because the gate below already handles a
+          # partial index properly: it prints both numbers and stands down
+          # rather than calling the comparison a verdict. The refusal in
+          # `eval` is for someone running it by hand, with no gate behind them.
+          python -m scholarly.cli eval --split dev --retriever dense --dtype float16 \n            --allow-partial-index | tee dense.json
 
       - name: The gate
         # A rebuild that retrieves worse than the lexical floor does not get

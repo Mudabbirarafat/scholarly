@@ -132,6 +132,29 @@ coverage guard above made it visible. The default is now the empty string.
 The pattern is the point: a system that measures itself needs the measurement
 to be falsifiable, or a bug in the measurement reads as a result.
 
+## The guard that came from getting it wrong
+
+An ablation run locally compared BM25 against the dense retriever and the
+fusion of the two, and produced a clean-looking table in which BM25 won
+everywhere and fusion made things worse. It was meaningless. The lexical
+index covered all 114,601 papers; the dense index held 6,200. The table
+measured the corpus, not the retrievers, and fusion "lost" because fusing a
+complete ranking with a crippled one drags the good list down.
+
+The CI gate already refuses that comparison — but the gate lives in the
+workflow, and `eval` is what a person runs by hand with nothing behind them.
+So `eval` now refuses it too:
+
+```
+the dense index holds 6,200 of the 114,601 documents the lexical index can
+reach, so a comparison between them would measure the corpus, not the
+retriever.
+```
+
+`--allow-partial-index` opts out, and even then both coverage numbers stay
+in the output, because the mistake was not knowing the numbers — it was
+reading past them.
+
 ## Why the pipeline exists
 
 PyTorch alone is about 800 MB and a free serving instance has 512 MB, so a
@@ -257,10 +280,13 @@ currently support:
   would be the sort of thing this project exists not to do.
 - **The deployed index is 5,000 documents, not 114,581.** The bundle is
   committed rather than fetched, and the page says which it is holding.
-- **No ablation.** Reciprocal-rank fusion over both retrievers, a cross-encoder
-  reranker and float16 vectors are one row each in a table that does not exist
-  yet. The harness takes any `search_fn`, so each is a measurement rather than
-  a rewrite.
+- **Fusion is built but unmeasured.** `eval --retriever hybrid` fuses BM25 and
+  dense with reciprocal rank fusion, and the fusion itself is tested — but no
+  honest number exists for it yet, because measuring it needs both retrievers
+  over the same corpus and that means a full pipeline run. The first attempt
+  at measuring it locally compared a complete lexical index against a partial
+  dense one and produced a confident, meaningless table; the guard below now
+  refuses that. A cross-encoder reranker is still not written at all.
 - **No migrations.** Schema comes from `create_all`; the warehouse is rebuilt
   from source rather than migrated.
 

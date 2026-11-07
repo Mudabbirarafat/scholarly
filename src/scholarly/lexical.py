@@ -103,3 +103,17 @@ def search(session: Session, query: str, *, k: int = 10, exclude: str | None = N
 
     found = [row[0] for row in rows if row[0] != exclude]
     return found[:k]
+
+
+def corpus_size(session: Session) -> int:
+    """How many documents the full-text index can actually reach.
+
+    Needed because "the corpus" and "what a retriever searches" are not the
+    same number the moment one index is behind the other, and comparing two
+    retrievers across that gap measures the gap.
+    """
+    try:
+        return int(session.execute(text(f"SELECT COUNT(*) FROM {FTS_TABLE}")).scalar() or 0)
+    except Exception:
+        # No index built yet: nothing is reachable lexically.
+        return 0
